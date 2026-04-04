@@ -21,6 +21,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newSyncCmd(),
 		newReconCmd(),
 		newVaultyCmd(),
+		newWitnessCmd(),
 		newRunCmd(),
 	)
 

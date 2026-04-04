@@ -106,6 +106,17 @@ func Builtins() []Capability {
 			Builtin:     true,
 			ArgsHint:    "No arguments required",
 		},
+		// --- Witness: test selector ---
+		{
+			Name:        "witness.select",
+			Kind:        KindTool,
+			Description: "Select tests to run based on changed files. Uses dependency graph, co-change history, and hotspot scoring. No args = use git diff. Args: [\"path/to/changed.ex\"] or [\"path/a.ex\", \"path/b.ex\"]",
+			Command:     []string{"witness", "select"},
+			Output:      "json",
+			Safety:      SafetyLevelSafe,
+			Builtin:     true,
+			ArgsHint:    "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]",
+		},
 		// --- Vaulty: secrets proxy ---
 		{
 			Name:        "vaulty.list",

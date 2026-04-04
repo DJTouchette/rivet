@@ -39,72 +39,156 @@ func newProjectInitCLICmd() *cobra.Command {
 		dir        string
 		name       string
 		modulePath string
+		lang       string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "init-cli",
 		Short: "Scaffold a starter project CLI",
-		Long: `Generate a Go + cobra project CLI with example commands organized by
-category (query, check, task). The scaffolded CLI includes a rivet-discover
+		Long: `Generate a project CLI with example commands organized by category
+(query, check, task). The scaffolded CLI includes a rivet-discover
 subcommand for auto-registration with Rivet.
 
-After scaffolding:
+Supported languages: go, elixir (auto-detected from project if --lang is omitted).
+
+After scaffolding (Go):
   cd <dir> && go mod tidy && make build
-  rivet project register-cli <dir>/<name>`,
+  rivet project register-cli <dir>/<name>
+
+After scaffolding (Elixir):
+  Mix tasks are added directly to your project — run 'mix help' to see them.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, err := os.Stat(".rivet"); os.IsNotExist(err) {
 				return fmt.Errorf(".rivet/ not found — run 'rivet init' first")
 			}
 
-			if dir == "" {
-				dir = filepath.Join("tools", name)
+			// Auto-detect language if not specified.
+			if lang == "" {
+				lang = detectProjectLanguage()
 			}
 
-			result, err := projectcli.Scaffold(dir, name, modulePath)
-			if err != nil {
-				return err
+			switch lang {
+			case "elixir":
+				return initElixirCLI(name)
+			default:
+				return initGoCLI(dir, name, modulePath)
 			}
-
-			if len(result.Files) == 0 && len(result.Skipped) > 0 {
-				fmt.Printf("All files already exist in %s/ — nothing to do.\n", dir)
-				return nil
-			}
-
-			fmt.Printf("Scaffolded project CLI in %s/:\n", dir)
-			for _, f := range result.Files {
-				fmt.Printf("  + %s\n", f)
-			}
-			for _, f := range result.Skipped {
-				fmt.Printf("  ~ %s (exists, skipped)\n", f)
-			}
-
-			// Write capabilities manifest.
-			manifestPath := capabilities.DefaultManifestPath()
-			if !fileExists(manifestPath) {
-				cliPath := "./" + filepath.Join(dir, name)
-				content := capabilities.StarterManifest(cliPath, name)
-				if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", manifestPath, err)
-				} else {
-					fmt.Printf("  + %s\n", manifestPath)
-				}
-			}
-
-			fmt.Println()
-			fmt.Println("Next steps:")
-			fmt.Printf("  cd %s && go mod tidy && make build\n", dir)
-			fmt.Printf("  Edit %s to add params to your capabilities\n", manifestPath)
-			fmt.Println("  rivet sync")
-
-			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&dir, "dir", "", "directory to scaffold into (default: tools/<name>)")
-	cmd.Flags().StringVar(&name, "name", "projectcli", "CLI binary name")
+	cmd.Flags().StringVar(&dir, "dir", "", "directory to scaffold into (default: tools/<name>, ignored for elixir)")
+	cmd.Flags().StringVar(&name, "name", "projectcli", "CLI name / task namespace")
 	cmd.Flags().StringVar(&modulePath, "module", "", "Go module path (default: same as name)")
+	cmd.Flags().StringVar(&lang, "lang", "", "scaffold language: go, elixir (auto-detected if omitted)")
 
 	return cmd
+}
+
+func initGoCLI(dir, name, modulePath string) error {
+	if dir == "" {
+		dir = filepath.Join("tools", name)
+	}
+
+	result, err := projectcli.Scaffold(dir, name, modulePath)
+	if err != nil {
+		return err
+	}
+
+	if len(result.Files) == 0 && len(result.Skipped) > 0 {
+		fmt.Printf("All files already exist in %s/ — nothing to do.\n", dir)
+		return nil
+	}
+
+	fmt.Printf("Scaffolded project CLI in %s/:\n", dir)
+	for _, f := range result.Files {
+		fmt.Printf("  + %s\n", f)
+	}
+	for _, f := range result.Skipped {
+		fmt.Printf("  ~ %s (exists, skipped)\n", f)
+	}
+
+	manifestPath := capabilities.DefaultManifestPath()
+	if !fileExists(manifestPath) {
+		cliPath := "./" + filepath.Join(dir, name)
+		content := capabilities.StarterManifest(cliPath, name)
+		if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", manifestPath, err)
+		} else {
+			fmt.Printf("  + %s\n", manifestPath)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Printf("  cd %s && go mod tidy && make build\n", dir)
+	fmt.Printf("  Edit %s to add params to your capabilities\n", manifestPath)
+	fmt.Println("  rivet sync")
+	return nil
+}
+
+func initElixirCLI(name string) error {
+	if name == "projectcli" {
+		name = "project"
+	}
+
+	result, err := projectcli.ScaffoldElixir(".", name)
+	if err != nil {
+		return err
+	}
+
+	if len(result.Files) == 0 && len(result.Skipped) > 0 {
+		fmt.Println("All Mix task files already exist — nothing to do.")
+		return nil
+	}
+
+	fmt.Println("Scaffolded Elixir project CLI as Mix tasks:")
+	for _, f := range result.Files {
+		fmt.Printf("  + %s\n", f)
+	}
+	for _, f := range result.Skipped {
+		fmt.Printf("  ~ %s (exists, skipped)\n", f)
+	}
+
+	// Write capabilities manifest.
+	manifestPath := capabilities.DefaultManifestPath()
+	if !fileExists(manifestPath) {
+		content := capabilities.StarterManifestElixir(name)
+		if err := os.WriteFile(manifestPath, []byte(content), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not write %s: %v\n", manifestPath, err)
+		} else {
+			fmt.Printf("  + %s\n", manifestPath)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Printf("  mix %s.query.status --json   # test the scaffolded task\n", name)
+	fmt.Printf("  Edit %s to add params to your capabilities\n", manifestPath)
+	fmt.Println("  rivet sync")
+	return nil
+}
+
+// detectProjectLanguage uses simple file heuristics to determine the primary language.
+func detectProjectLanguage() string {
+	if fileExists("mix.exs") {
+		return "elixir"
+	}
+	if fileExists("go.mod") {
+		return "go"
+	}
+	if fileExists("package.json") {
+		return "node"
+	}
+	if fileExists("Cargo.toml") {
+		return "rust"
+	}
+	if fileExists("requirements.txt") || fileExists("pyproject.toml") || fileExists("setup.py") {
+		return "python"
+	}
+	if fileExists("Gemfile") {
+		return "ruby"
+	}
+	return "go"
 }
 
 // --- register-cli ---

@@ -29,6 +29,7 @@ They are organized into three categories:
 		newContextShowCmd(),
 		newContextRecommendCmd(),
 		newContextScaffoldCmd(),
+		newContextLintCmd(),
 	)
 
 	return cmd
@@ -143,6 +144,59 @@ To add tags and related_paths, use frontmatter in context documents:
 		},
 	}
 	cmd.Flags().IntVarP(&maxResults, "max", "n", 5, "max results")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
+	return cmd
+}
+
+func newContextLintCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "lint",
+		Short: "Validate context documents for quality and staleness",
+		Long: `Check context documents for common issues:
+
+  missing-tags          — no tags in frontmatter
+  missing-related-paths — no related_paths in frontmatter
+  placeholder-section   — unfilled <!-- ... --> template comments
+  empty-body            — no content beyond headings
+  stale-related-path    — related_paths glob matches no files on disk
+  stale-reference       — backtick-quoted paths in body don't exist on disk`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			docs, err := rivetctx.Load(".rivet/context")
+			if err != nil {
+				return err
+			}
+			if len(docs) == 0 {
+				fmt.Println("No context documents found.")
+				return nil
+			}
+
+			result := rivetctx.Lint(docs, ".")
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+
+			if len(result.Warnings) == 0 {
+				fmt.Printf("Checked %d context docs — no issues found.\n", result.DocsRead)
+				return nil
+			}
+
+			fmt.Printf("Checked %d context docs — %d issue(s):\n\n", result.DocsRead, len(result.Warnings))
+			for _, w := range result.Warnings {
+				severity := "WARN"
+				if w.Severity == rivetctx.SeverityError {
+					severity = "ERR "
+				}
+				fmt.Printf("  [%s] %s (%s): %s\n", severity, w.Document, w.Rule, w.Message)
+			}
+			fmt.Println()
+			return nil
+		},
+	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
 	return cmd
 }

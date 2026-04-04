@@ -122,3 +122,41 @@ func StarterManifest(cliPath, cliName string) string {
 
 	return b.String()
 }
+
+// StarterManifestElixir returns a capabilities.yaml for Elixir Mix task scaffolding.
+func StarterManifestElixir(cliName string) string {
+	var b strings.Builder
+	b.WriteString("# Project CLI capabilities exposed to Claude Code via Rivet's MCP server.\n")
+	b.WriteString("# Each capability becomes an MCP tool with typed parameters.\n")
+	b.WriteString("#\n")
+	b.WriteString("# Param types: string, number, integer, boolean\n")
+	b.WriteString("# Params with required: true become required tool inputs.\n")
+	b.WriteString("# The flag field overrides the CLI flag name (default: --<name>).\n\n")
+
+	b.WriteString("cli: mix\n\n")
+	b.WriteString("capabilities:\n")
+
+	b.WriteString(fmt.Sprintf("  - name: %s.status\n", cliName))
+	b.WriteString("    description: Show project status summary\n")
+	b.WriteString(fmt.Sprintf("    command: [\"%s.query.status\"]\n", cliName))
+	b.WriteString("    output: json\n")
+	b.WriteString("    safety: safe\n\n")
+
+	b.WriteString(fmt.Sprintf("  - name: %s.health\n", cliName))
+	b.WriteString("    description: Run health checks\n")
+	b.WriteString(fmt.Sprintf("    command: [\"%s.check.health\"]\n", cliName))
+	b.WriteString("    output: json\n")
+	b.WriteString("    safety: safe\n\n")
+
+	b.WriteString(fmt.Sprintf("  - name: %s.seed\n", cliName))
+	b.WriteString("    description: Seed development data\n")
+	b.WriteString(fmt.Sprintf("    command: [\"%s.task.seed\"]\n", cliName))
+	b.WriteString("    output: json\n")
+	b.WriteString("    safety: guarded\n")
+	b.WriteString("    params:\n")
+	b.WriteString("      - name: count\n")
+	b.WriteString("        type: integer\n")
+	b.WriteString("        description: Number of records to seed\n")
+
+	return b.String()
+}

@@ -428,3 +428,19 @@ clean:
 	rm -f $(BIN)
 `, cliName)
 }
+
+// fileExists returns true if path exists on disk.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// mkdirForFile creates all parent directories for the given file path.
+func mkdirForFile(path string) error {
+	return os.MkdirAll(filepath.Dir(path), 0755)
+}
+
+// writeFile writes content to the given path.
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0644)
+}

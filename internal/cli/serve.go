@@ -1,0 +1,72 @@
+package cli
+
+import (
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/djtouchette/rivet/internal/capabilities"
+	"github.com/djtouchette/rivet/internal/config"
+	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/mcp"
+	"github.com/djtouchette/rivet/internal/recon"
+	"github.com/djtouchette/rivet/internal/vaulty"
+	"github.com/spf13/cobra"
+)
+
+func newServeCmd(version string) *cobra.Command {
+	var debug bool
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the MCP server for Claude Code",
+		Long: `Start the Rivet MCP server, exposing registered capabilities as MCP tools
+and context documents as MCP resources over JSON-RPC 2.0 stdio.
+
+Configure Claude Code to use this server by adding to your MCP settings:
+
+  {
+    "mcpServers": {
+      "rivet": {
+        "command": "rivet",
+        "args": ["serve"]
+      }
+    }
+  }`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.LoadOrDefault("")
+			if err != nil {
+				return err
+			}
+
+			reg := buildRegistry(cfg)
+
+			exec := capabilities.NewExecutor(reg)
+			exec.RegisterInProcess("vaulty", vaulty.Run)
+			exec.RegisterInProcess("recon", recon.Run)
+
+			contexts, err := rivetctx.Load(".rivet/context")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading context: %v\n", err)
+				contexts = nil
+			}
+
+			policies := buildPolicies(cfg)
+			srv := mcp.NewServer(reg, exec, contexts, policies, version)
+
+			if debug {
+				srv.SetLogger(log.New(os.Stderr, "[rivet-mcp] ", log.LstdFlags))
+			}
+
+			// Warm the recon cache in the background so the first
+			// recon tool call doesn't pay the cold-start cost.
+			go recon.Run([]string{"refresh"})
+
+			return srv.Serve(os.Stdin, os.Stdout)
+		},
+	}
+
+	cmd.Flags().BoolVar(&debug, "debug", false, "enable debug logging to stderr")
+
+	return cmd
+}

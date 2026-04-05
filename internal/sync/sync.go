@@ -40,7 +40,7 @@ func GenerateClaudeMD(caps []capabilities.Capability, docs []*rivetctx.Document)
 	b.WriteString("2. **`rivet.context-show`** to read the recommended docs\n")
 	b.WriteString("3. **Read the source code** if the context doc doesn't fully answer the question\n")
 	b.WriteString("4. Only use `recon.grep` / `recon.search` if you don't know where to look\n")
-	b.WriteString("5. **`rivet.learn`** — you MUST record any non-obvious finding. This is not optional.\n\n")
+	b.WriteString("5. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.\n\n")
 
 	b.WriteString("### Change tasks (fix, add, refactor)\n\n")
 	b.WriteString("Changes require understanding blast radius. Use the full recon sweep.\n\n")
@@ -50,7 +50,14 @@ func GenerateClaudeMD(caps []capabilities.Capability, docs []*rivetctx.Document)
 	b.WriteString("4. **`recon.grep`** to trace callers and assess impact. Use `--type definition` to find definitions only. Use plain Grep for simple targeted lookups.\n")
 	b.WriteString("5. **`recon.context`** on high-fan-in files to check risk metrics before modifying them\n")
 	b.WriteString("6. **`witness.select`** on the files you changed — know which tests to run before committing\n")
-	b.WriteString("7. **`rivet.learn`** — you MUST record any non-obvious finding. This is not optional.\n\n")
+	b.WriteString("7. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.\n\n")
+
+	// Promote ad-hoc operations to project CLI.
+	b.WriteString("### Reusable operations\n\n")
+	b.WriteString("If you find yourself writing a raw SQL query, a one-off script, or an ad-hoc shell command to answer a recurring question, ")
+	b.WriteString("**add it as a project CLI command** instead of leaving it as improvisation. ")
+	b.WriteString("Named commands are safer, repeatable, and cheaper than re-deriving the same logic next session.\n\n")
+	b.WriteString("Ask yourself: \"Will someone need to do this again?\" If yes, wrap it in the project CLI.\n\n")
 
 	// Tool reference.
 	b.WriteString("### Tool reference\n\n")

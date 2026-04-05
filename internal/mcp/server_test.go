@@ -48,7 +48,7 @@ func newTestServer(t *testing.T) *Server {
 		},
 	}
 
-	return NewServer(reg, exec, contexts, nil, "test")
+	return NewServer(reg, exec, contexts, nil, "test", true)
 }
 
 // call sends a single JSON-RPC request to the server and returns the response.
@@ -323,7 +323,7 @@ func TestContextListTool(t *testing.T) {
 func TestContextListToolEmpty(t *testing.T) {
 	reg := capabilities.NewRegistry()
 	exec := capabilities.NewExecutor(reg)
-	s := NewServer(reg, exec, nil, nil, "test")
+	s := NewServer(reg, exec, nil, nil, "test", true)
 
 	resp := call(t, s, `{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"rivet.context-list","arguments":{}}}`)
 
@@ -419,7 +419,7 @@ func TestResourcesList(t *testing.T) {
 func TestResourcesListEmpty(t *testing.T) {
 	reg := capabilities.NewRegistry()
 	exec := capabilities.NewExecutor(reg)
-	s := NewServer(reg, exec, nil, nil, "test")
+	s := NewServer(reg, exec, nil, nil, "test", true)
 
 	resp := call(t, s, `{"jsonrpc":"2.0","id":6,"method":"resources/list","params":{}}`)
 
@@ -517,7 +517,7 @@ func TestToolsCallBlockedByPolicy(t *testing.T) {
 			RequireEnv: []string{"NEVER_SET_XYZ_TEST_ONLY"},
 		},
 	}
-	s := NewServer(reg, exec, nil, policies, "test")
+	s := NewServer(reg, exec, nil, policies, "test", true)
 
 	resp := call(t, s, `{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"gated-cmd","arguments":{"approve":true}}}`)
 
@@ -564,7 +564,7 @@ func newServerWithRecon(t *testing.T) *Server {
 		Safety:  capabilities.SafetyLevelSafe,
 	})
 	exec := capabilities.NewExecutor(reg)
-	return NewServer(reg, exec, nil, nil, "test")
+	return NewServer(reg, exec, nil, nil, "test", true)
 }
 
 func TestContextFirstNudge(t *testing.T) {

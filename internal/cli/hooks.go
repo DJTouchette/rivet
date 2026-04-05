@@ -188,7 +188,7 @@ if [ ! -d ".rivet/context" ]; then
   exit 0
 fi
 
-learning_count=$(grep -rc "^- [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\} — " .rivet/context/ 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
+learning_count=$(grep -rEc "^- [0-9]{4}-[0-9]{2}-[0-9]{2}[: —]" .rivet/context/ 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
 
 if [ "$learning_count" -ge "$LEARNING_THRESHOLD" ]; then
   echo "Context docs have accumulated ${learning_count} learnings (threshold: ${LEARNING_THRESHOLD}). Run /rivet-compact-context to deduplicate, promote important ones to Gotchas, and prune stale entries."

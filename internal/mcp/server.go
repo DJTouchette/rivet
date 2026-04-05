@@ -187,12 +187,13 @@ var reconInvestigationTools = map[string]bool{
 }
 
 type Server struct {
-	registry *capabilities.Registry
-	executor *capabilities.Executor
-	contexts []*rivetctx.Document
-	policies []policy.Rule
-	version  string
-	logger   *log.Logger
+	registry    *capabilities.Registry
+	executor    *capabilities.Executor
+	contexts    []*rivetctx.Document
+	policies    []policy.Rule
+	version     string
+	logger      *log.Logger
+	autoCompact bool // whether to nudge consolidation when docs get long
 
 	// Session state for nudging.
 	reconCallsSinceLearn int
@@ -201,14 +202,15 @@ type Server struct {
 
 // NewServer creates an MCP server backed by the given registry, executor,
 // and context documents.
-func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts []*rivetctx.Document, policies []policy.Rule, version string) *Server {
+func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts []*rivetctx.Document, policies []policy.Rule, version string, autoCompact bool) *Server {
 	return &Server{
-		registry: reg,
-		executor: exec,
-		contexts: contexts,
-		policies: policies,
-		version:  version,
-		logger:   log.New(io.Discard, "", 0),
+		registry:    reg,
+		executor:    exec,
+		contexts:    contexts,
+		policies:    policies,
+		version:     version,
+		autoCompact: autoCompact,
+		logger:      log.New(io.Discard, "", 0),
 	}
 }
 
@@ -691,10 +693,12 @@ func (s *Server) handleLearn(req *Request, docName, learning string) *Response {
 
 	text := fmt.Sprintf("Recorded learning in %s: %s", docName, learning)
 
-	// Check if doc needs consolidation.
-	stats := rivetctx.GetDocStats(doc.Path)
-	if stats.Learnings >= consolidateLearningsThreshold || stats.Lines >= consolidateLinesThreshold {
-		text += fmt.Sprintf(consolidateMessage, docName, stats.Learnings, stats.Lines, docName)
+	// Check if doc needs consolidation (only nudge if auto_compact is enabled).
+	if s.autoCompact {
+		stats := rivetctx.GetDocStats(doc.Path)
+		if stats.Learnings >= consolidateLearningsThreshold || stats.Lines >= consolidateLinesThreshold {
+			text += fmt.Sprintf(consolidateMessage, docName, stats.Learnings, stats.Lines, docName)
+		}
 	}
 
 	return &Response{

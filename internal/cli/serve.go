@@ -54,7 +54,7 @@ Configure Claude Code to use this server by adding to your MCP settings:
 			}
 
 			policies := buildPolicies(cfg)
-			srv := mcp.NewServer(reg, exec, contexts, policies, version)
+			srv := mcp.NewServer(reg, exec, contexts, policies, version, cfg.Context.ShouldAutoCompact())
 
 			if debug {
 				srv.SetLogger(log.New(os.Stderr, "[rivet-mcp] ", log.LstdFlags))

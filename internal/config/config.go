@@ -11,10 +11,29 @@ import (
 // Config is the top-level rivet configuration, parsed from .rivet/config.yaml.
 type Config struct {
 	ProjectCLI   ProjectCLIConfig `yaml:"project_cli,omitempty"`
+	Context      ContextConfig    `yaml:"context,omitempty"`
 	Capabilities []CapabilityDef  `yaml:"capabilities,omitempty"`
 	Policies     []PolicyDef      `yaml:"policies,omitempty"`
 
 	path string
+}
+
+// ContextConfig controls how the context system behaves.
+type ContextConfig struct {
+	// AutoCompact controls whether the MCP server nudges Claude to
+	// consolidate context docs when they get long. When false, learnings
+	// accumulate until someone explicitly runs /rivet-compact-context
+	// (e.g. after merging branches). Default: true.
+	AutoCompact *bool `yaml:"auto_compact,omitempty"`
+}
+
+// ShouldAutoCompact returns whether auto-compaction nudges are enabled.
+// Defaults to true if not set.
+func (c ContextConfig) ShouldAutoCompact() bool {
+	if c.AutoCompact == nil {
+		return true
+	}
+	return *c.AutoCompact
 }
 
 // ProjectCLIConfig describes the project-local CLI binary.
@@ -120,6 +139,14 @@ func loadFrom(path string) (*Config, error) {
 func StarterConfigYAML() []byte {
 	return []byte(`# Rivet configuration
 # See: https://github.com/djtouchette/rivet
+
+# Context — controls how the context system behaves.
+# auto_compact: true (default) — nudge Claude to consolidate docs when they get long.
+#               false — let learnings accumulate and compact manually (e.g. after merges).
+#               Set to false for team workflows where branches add learnings independently
+#               and compaction happens on main after merge.
+# context:
+#   auto_compact: false
 
 # Project CLI — the repo-local CLI that exposes project-specific operations.
 # Uncomment and set the path to your project CLI binary.

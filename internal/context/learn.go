@@ -43,7 +43,7 @@ func AppendLearning(path, learning string) error {
 
 	content := string(data)
 	date := time.Now().Format("2006-01-02")
-	entry := fmt.Sprintf("- %s — %s", date, learning)
+	entry := fmt.Sprintf("- %s: %s", date, learning)
 
 	// Find existing Learnings section.
 	idx := strings.Index(content, learningsHeader)

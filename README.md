@@ -199,9 +199,9 @@ If your project has its own CLI (or you want to build one), Rivet can expose its
 cli: ./bin/projectcli
 
 capabilities:
-  - name: db.patient-summary
-    description: Read-only patient summary
-    command: [query, patient-summary]
+  - name: db.revenue-summary
+    description: Read-only revenue summary
+    command: [query, revenue-summary]
     output: json
     safety: safe
     params:
@@ -210,7 +210,7 @@ capabilities:
         required: true
 ```
 
-Claude calls `db.patient-summary` instead of writing SQL from vibes.
+Claude calls `db.revenue-summary` instead of writing SQL from vibes.
 
 ## Commands
 

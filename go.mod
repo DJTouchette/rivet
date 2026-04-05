@@ -3,9 +3,9 @@ module github.com/djtouchette/rivet
 go 1.25.4
 
 require (
-	github.com/djtouchette/recon v0.5.0
+	github.com/djtouchette/recon v0.7.0
 	github.com/djtouchette/vaulty v0.4.0
-	github.com/djtouchette/witness v0.1.0
+	github.com/djtouchette/witness v0.2.0
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )

@@ -12,11 +12,11 @@ Rivet fixes this.
 
 Rivet is an MCP server that sits between Claude Code and your project. It gives the AI three things it desperately needs:
 
-1. **Real tools** instead of shell improvisation
-2. **Domain knowledge** that persists across sessions
+1. **Domain knowledge** that persists across sessions and improves over time
+2. **Real tools** instead of shell improvisation
 3. **Guardrails** so it doesn't do something profoundly stupid at 2am
 
-The twist: the domain knowledge isn't static. It's a living system. Claude learns things while working, writes them down in the right place, and the next session starts smarter. The docs grow, get pruned when they're too long, and self-organize over time.
+The domain knowledge is the core of the whole thing. It's not static docs you write once and forget. It's a living system. Claude learns things while working, writes them down in the right place, and the next session starts smarter. The docs grow, get pruned when they're too long, and self-organize over time.
 
 You seed it once. After that, it maintains itself.
 
@@ -40,67 +40,9 @@ rivet init
 
 That's it. Open Claude Code and the MCP server starts automatically. Claude now has project-aware tools, your domain knowledge, and a feedback loop that gets smarter with use.
 
-## The Feedback Loop
-
-This is the part that actually matters.
-
-```
-You start a task
-    → Claude investigates using recon tools (grep, symbols, related files)
-    → After a few searches, a hook nudges: "hey, check the context docs first"
-    → Claude reads the billing domain doc, finds the gotchas
-    → Saves 10 minutes of blind exploration
-    → Discovers something new during the task
-    → Another hook nudges: "learned anything? write it down"
-    → Claude appends the finding to the right domain file
-    → Context doc gets too long eventually
-    → Claude summarizes, promotes the good stuff, trims the noise
-    → Next session starts with better knowledge
-```
-
-The context files are just markdown in `.rivet/context/`. You can read them, edit them, commit them. They're not magic — they're documentation that happens to maintain itself.
-
-## The Four Pieces
-
-Rivet is actually four tools that compose together:
-
-### Recon — "What is this codebase?"
-
-Deterministic repo intelligence. No AI, just fast static analysis.
-
-- Dependency graphs, import resolution, reverse lookups
-- Symbol search across 10+ languages
-- Co-change history (files that always change together)
-- Hotspot detection (high fan-in + high churn = scary)
-- Enriched grep that classifies results as definitions, references, tests, or comments
-
-Claude calls these instead of running raw `grep` and hoping for the best.
-
-### Witness — "Which tests should I run?"
-
-Smart test selection based on what actually changed.
-
-- Maps changed files to relevant tests via the dependency graph
-- Scores by distance: direct test > 1-hop import > 2-hop > co-change pattern
-- Knows about Go, Elixir, Python, Ruby, Node, Rust test frameworks
-- Stops traversing at high-fan-out boundaries so it doesn't suggest your entire test suite
-
-### Vaulty — "I need to hit an API but shouldn't see the key"
-
-Secrets proxy for AI agents. The agent gets capabilities, not credentials.
-
-- Injects auth headers, env vars, bearer tokens without exposing values
-- Redacts secrets from all output (raw, base64, URL-encoded)
-- Policy enforcement: this key can only talk to `api.stripe.com`
-- Full audit trail of every request
-
-Claude calls `vaulty.proxy` or `vaulty.exec` and never sees a raw secret.
-
-### Rivet — "Glue it all together"
-
-The orchestrator. Wraps the other three as in-process runners, adds the context system and the nudging hooks, and serves everything over MCP.
-
 ## The Context System
+
+This is the heart of Rivet. Everything else exists to feed into this or act on it.
 
 Context docs live in `.rivet/context/` and come in three flavors:
 
@@ -131,23 +73,102 @@ Handles invoice generation, retry logic, payment failure handling...
 - Status names in the DB don't match the API. Obviously.
 
 ## Learnings
-- 2026-04-01 — ServiceRenderedInsertTrigger fires 2 queries per insert, watch for N+1
-- 2026-04-03 — Hidden dependency on ThirdPartyCheck table for payment validation
+- 2026-04-01: ServiceRenderedInsertTrigger fires 2 queries per insert, watch for N+1
+- 2026-04-03: Hidden dependency on ThirdPartyCheck table for payment validation
 ```
 
 The `## Learnings` section is where Claude appends new findings. When it grows too long, the `/rivet-compact-context` skill promotes the important stuff to permanent sections and clears the noise.
 
-## The Nudging System
+Context docs are exposed as MCP resources, so Claude can pull the right domain knowledge before making changes. The recommendation engine scores docs by tag matches, file path globs, and keyword relevance, so Claude doesn't have to guess which context to read.
 
-Rivet doesn't just provide tools — it shapes how Claude uses them.
+### The Feedback Loop
 
-**After 2+ recon searches without reading context:** "You're exploring blind. Check the context docs — someone already figured this out."
+This is where it gets interesting.
+
+```
+You start a task
+    → Claude investigates using recon tools (grep, symbols, related files)
+    → After a few searches, a hook nudges: "hey, check the context docs first"
+    → Claude reads the billing domain doc, finds the gotchas
+    → Saves 10 minutes of blind exploration
+    → Discovers something new during the task
+    → Another hook nudges: "learned anything? write it down"
+    → Claude appends the finding to the right domain file
+    → Context doc gets too long eventually
+    → Claude summarizes, promotes the good stuff, trims the noise
+    → Next session starts with better knowledge
+```
+
+The context files are just markdown in `.rivet/context/`. You can read them, edit them, commit them. They're not magic. They're documentation that happens to maintain itself.
+
+### The Nudging System
+
+Rivet doesn't just provide tools. It shapes how Claude uses them.
+
+**After 2+ recon searches without reading context:** "You're exploring blind. Check the context docs, someone already figured this out."
 
 **After 5+ investigations without recording a finding:** "You've been digging for a while. Learn anything worth writing down?"
 
 **After a doc hits 8+ learnings or 60+ lines:** "This doc is getting chunky. Time to consolidate."
 
-These are Claude Code hooks that fire automatically. They create a natural rhythm: explore → check existing knowledge → investigate → record what you found → keep docs clean.
+These are Claude Code hooks that fire automatically. They create a natural rhythm: explore, check existing knowledge, investigate, record what you found, keep docs clean.
+
+## Recon: Codebase Intelligence
+
+Deterministic repo intelligence. No AI, just fast static analysis.
+
+- Dependency graphs, import resolution, reverse lookups
+- Symbol search across 10+ languages
+- Co-change history (files that always change together)
+- Hotspot detection (high fan-in + high churn = scary)
+- Enriched grep that classifies results as definitions, references, tests, or comments
+- File context with fan-in/fan-out metrics, ownership, nearby configs
+
+Claude calls these instead of running raw `grep` and hoping for the best. Recon is what feeds the context system with real facts. It's the reason the feedback loop actually works: Claude can discover things deterministically instead of guessing, and then record those discoveries back into context.
+
+**Tools exposed via MCP:**
+
+| Tool | What it does |
+|------|-------------|
+| `recon.search` | Unified search across symbols, paths, and content. Start here. |
+| `recon.grep` | Enriched grep with definition/reference/test/comment classification |
+| `recon.related` | Files related to a path (imports, co-change, naming, test pairs) |
+| `recon.symbols` | Search or list functions, types, classes |
+| `recon.context` | File preview, fan-in/fan-out, churn, hotspot score |
+| `recon.hotspots` | Top files ranked by risk (fan-in * churn) |
+| `recon.tests` | Find test files for a source file |
+| `recon.overview` | Project structure, languages, frameworks, entrypoints |
+| `recon.changes` | Recent git change summary |
+| `recon.refresh` | Incremental cache update |
+
+## Witness: Test Selection
+
+Smart test selection based on what actually changed.
+
+- Maps changed files to relevant tests via the dependency graph
+- Scores by distance: direct test > 1-hop import > 2-hop > co-change pattern
+- Knows about Go, Elixir, Python, Ruby, Node, Rust test frameworks
+- Stops traversing at high-fan-out boundaries so it doesn't suggest your entire test suite
+
+**Tools exposed via MCP:**
+
+| Tool | What it does |
+|------|-------------|
+| `witness.select` | Select tests for changed files (or auto-detect from git diff) |
+| `witness.run` | Same as select but returns the executable test command |
+| `witness.staged` | Select tests for staged changes (pre-commit) |
+| `witness.since` | Select tests since a git ref (PR review) |
+
+## Vaulty: Secrets Proxy
+
+Secrets proxy for AI agents. The agent gets capabilities, not credentials.
+
+- Injects auth headers, env vars, bearer tokens without exposing values
+- Redacts secrets from all output (raw, base64, URL-encoded)
+- Policy enforcement: this key can only talk to `api.stripe.com`
+- Full audit trail of every request
+
+Claude calls `vaulty.proxy` or `vaulty.exec` and never sees a raw secret.
 
 ## Safety Levels
 
@@ -214,9 +235,9 @@ rivet project commands        List project CLI commands
 
 Installed by `rivet init`, run them with `/` in Claude Code:
 
-- **`/rivet-setup`** — The full onboarding: init, scaffold, fill context, sync
-- **`/rivet-fill-context`** — Have Claude fill out placeholder context docs using recon
-- **`/rivet-compact-context`** — Consolidate learnings, prune stale info, keep docs tight
+- **`/rivet-setup`** : Full onboarding. Init, scaffold, fill context, sync.
+- **`/rivet-fill-context`** : Have Claude fill out placeholder context docs using recon.
+- **`/rivet-compact-context`** : Consolidate learnings, prune stale info, keep docs tight.
 
 ## Building
 

@@ -1,162 +1,222 @@
 # Rivet
 
-A project capability layer for Claude Code. One CLI that packages safe, explicit project operations and exposes them via MCP — so Claude Code calls real project tools instead of improvising shell commands.
+Your AI coding agent is smart. It's also completely clueless about your project.
 
-**The problem:** Claude Code is powerful but blind. It improvises SQL queries, guesses at project structure, and cobbles together shell commands without knowing your codebase's conventions, safety rules, or operational surface.
+It doesn't know that the billing retry logic is split across two services. It doesn't know that `ServiceRenderedInsertTrigger` fires two queries and will absolutely ruin your day if you touch it wrong. It doesn't know your team's conventions, your pain points, or that one migration script that must never run on Tuesdays.
 
-**Rivet's approach:** Define your project's capabilities once. Rivet exposes them as MCP tools that Claude Code can call directly — project CLI commands, repo intelligence, structured context, and safety policies.
+So it improvises. It guesses at SQL. It greps around hoping to stumble on the right file. It reinvents your deploy script from scratch every single time.
+
+Rivet fixes this.
+
+## What It Actually Does
+
+Rivet is an MCP server that sits between Claude Code and your project. It gives the AI three things it desperately needs:
+
+1. **Real tools** instead of shell improvisation
+2. **Domain knowledge** that persists across sessions
+3. **Guardrails** so it doesn't do something profoundly stupid at 2am
+
+The twist: the domain knowledge isn't static. It's a living system. Claude learns things while working, writes them down in the right place, and the next session starts smarter. The docs grow, get pruned when they're too long, and self-organize over time.
+
+You seed it once. After that, it maintains itself.
 
 ## Quick Start
 
 ```bash
-# Install
+# Install rivet and its friends
 go install github.com/djtouchette/rivet/cmd/rivet@latest
+go install github.com/djtouchette/recon/cmd/recon@latest
+go install github.com/djtouchette/witness/cmd/witness@latest
+go install github.com/djtouchette/vaulty/cmd/vaulty@latest
 
 # Initialize in your project
 cd your-project
 rivet init
 
-# This creates:
-#   .rivet/config.yaml          — capability manifest
-#   .rivet/context/             — structured context docs
-#   .mcp.json                   — MCP server config for Claude Code
-#   .claude/skills/             — Claude Code skill files
-#   .claude/settings.json       — hooks for context learning
-
-# Scaffold context docs from your codebase
-rivet context scaffold
-
-# Fill them out with AI assistance (run in Claude Code)
-/rivet-fill-context
-
-# Sync capabilities to CLAUDE.md
-rivet sync
+# Let Claude scaffold context docs from your codebase
+# (run this inside Claude Code)
+/rivet-setup
 ```
 
-Open Claude Code and the rivet MCP server starts automatically. Claude Code gets project-aware tools instead of raw shell.
+That's it. Open Claude Code and the MCP server starts automatically. Claude now has project-aware tools, your domain knowledge, and a feedback loop that gets smarter with use.
 
-## What Rivet Gives Claude Code
+## The Feedback Loop
 
-### Project CLI Commands
+This is the part that actually matters.
 
-Register your project's operational CLI and expose commands as MCP tools:
-
-```yaml
-# .rivet/config.yaml
-project_cli:
-  command: "./bin/projectcli"
-
-capabilities:
-  - name: "db.patient-summary"
-    description: "Read-only patient summary report"
-    command: ["./bin/projectcli", "db", "patient-summary"]
-    output: "json"
-    safety: "safe"
-
-  - name: "billing.failures"
-    description: "Billing failure summary by date range"
-    command: ["./bin/projectcli", "billing", "failures"]
-    output: "json"
-    safety: "safe"
+```
+You start a task
+    → Claude investigates using recon tools (grep, symbols, related files)
+    → After a few searches, a hook nudges: "hey, check the context docs first"
+    → Claude reads the billing domain doc, finds the gotchas
+    → Saves 10 minutes of blind exploration
+    → Discovers something new during the task
+    → Another hook nudges: "learned anything? write it down"
+    → Claude appends the finding to the right domain file
+    → Context doc gets too long eventually
+    → Claude summarizes, promotes the good stuff, trims the noise
+    → Next session starts with better knowledge
 ```
 
-Claude Code calls `db.patient-summary` instead of guessing at SQL. Every command has a safety level (`safe`, `guarded`, `dangerous`) and structured JSON output.
+The context files are just markdown in `.rivet/context/`. You can read them, edit them, commit them. They're not magic — they're documentation that happens to maintain itself.
 
-### Repo Intelligence (Recon)
+## The Four Pieces
 
-Built-in integration with [recon](https://github.com/DJTouchette/recon) for fast, deterministic codebase understanding:
+Rivet is actually four tools that compose together:
 
-- **`recon.overview`** — project structure, languages, frameworks, entrypoints
-- **`recon.related`** — find files related to a given path (imports, co-change, naming)
-- **`recon.tests`** — discover test files for a source file
-- **`recon.symbols`** — search functions, types, and classes
-- **`recon.search`** — unified search across symbols, paths, and content
-- **`recon.grep`** — enriched grep with classification (definition/reference/test/comment)
-- **`recon.hotspots`** — high fan-in, high churn files (risky to change)
-- **`recon.context`** — file preview, owners, metrics, nearby configs
+### Recon — "What is this codebase?"
 
-### Structured Context
+Deterministic repo intelligence. No AI, just fast static analysis.
 
-Encode domain knowledge that survives across sessions:
+- Dependency graphs, import resolution, reverse lookups
+- Symbol search across 10+ languages
+- Co-change history (files that always change together)
+- Hotspot detection (high fan-in + high churn = scary)
+- Enriched grep that classifies results as definitions, references, tests, or comments
+
+Claude calls these instead of running raw `grep` and hoping for the best.
+
+### Witness — "Which tests should I run?"
+
+Smart test selection based on what actually changed.
+
+- Maps changed files to relevant tests via the dependency graph
+- Scores by distance: direct test > 1-hop import > 2-hop > co-change pattern
+- Knows about Go, Elixir, Python, Ruby, Node, Rust test frameworks
+- Stops traversing at high-fan-out boundaries so it doesn't suggest your entire test suite
+
+### Vaulty — "I need to hit an API but shouldn't see the key"
+
+Secrets proxy for AI agents. The agent gets capabilities, not credentials.
+
+- Injects auth headers, env vars, bearer tokens without exposing values
+- Redacts secrets from all output (raw, base64, URL-encoded)
+- Policy enforcement: this key can only talk to `api.stripe.com`
+- Full audit trail of every request
+
+Claude calls `vaulty.proxy` or `vaulty.exec` and never sees a raw secret.
+
+### Rivet — "Glue it all together"
+
+The orchestrator. Wraps the other three as in-process runners, adds the context system and the nudging hooks, and serves everything over MCP.
+
+## The Context System
+
+Context docs live in `.rivet/context/` and come in three flavors:
 
 ```
 .rivet/context/
-  domains/billing.md       — what billing does, its invariants, common traps
-  domains/auth.md          — auth boundaries, session rules
-  modules/patient-search.md — how search works, what it depends on
-  paradigms/stack.md       — framework conventions, testing approach
-  paradigms/hotspots.md    — high-risk files with metrics
+  domains/         ← business areas (billing, auth, scheduling)
+  modules/         ← technical subsystems (patient-search, ledger-sync)
+  paradigms/       ← cross-cutting patterns (caching, event handling)
 ```
 
-Context docs are exposed as MCP resources. Claude Code reads the relevant context before making changes, instead of guessing at intent.
+Each doc has frontmatter linking it to relevant files and tags:
 
-The `rivet.learn` tool lets Claude Code append findings to context docs during investigation — building institutional knowledge over time.
+```markdown
+---
+tags: [billing, invoice, payment]
+related_paths:
+  - backend/Handlers/PaymentGateway/**
+  - clients/web/src/pages/Invoices/**
+---
 
-### Secrets via Vaulty
+# Billing
 
-Built-in integration with [vaulty](https://github.com/DJTouchette/vaulty) for secret-aware operations. Claude Code gets authenticated API calls and secret-injected commands without ever seeing raw credentials.
+## Overview
+Handles invoice generation, retry logic, payment failure handling...
 
-### Safety Policies
+## Gotchas
+- Retry logic is split between the scheduler and payment adapter
+- Status names in the DB don't match the API. Obviously.
 
-Every capability has a safety level:
+## Learnings
+- 2026-04-01 — ServiceRenderedInsertTrigger fires 2 queries per insert, watch for N+1
+- 2026-04-03 — Hidden dependency on ThirdPartyCheck table for payment validation
+```
 
-| Level | Behavior | Examples |
-|-------|----------|----------|
-| `safe` | Auto-allowed | Summaries, list, search, diagnostics |
-| `guarded` | Environment checks | Cache refresh, seed, codegen |
-| `dangerous` | Requires approval | Migrations, deploys, backfills |
+The `## Learnings` section is where Claude appends new findings. When it grows too long, the `/rivet-compact-context` skill promotes the important stuff to permanent sections and clears the noise.
+
+## The Nudging System
+
+Rivet doesn't just provide tools — it shapes how Claude uses them.
+
+**After 2+ recon searches without reading context:** "You're exploring blind. Check the context docs — someone already figured this out."
+
+**After 5+ investigations without recording a finding:** "You've been digging for a while. Learn anything worth writing down?"
+
+**After a doc hits 8+ learnings or 60+ lines:** "This doc is getting chunky. Time to consolidate."
+
+These are Claude Code hooks that fire automatically. They create a natural rhythm: explore → check existing knowledge → investigate → record what you found → keep docs clean.
+
+## Safety Levels
+
+Every capability has a classification:
+
+| Level | What happens | Examples |
+|-------|-------------|----------|
+| `safe` | Runs automatically | Queries, searches, diagnostics |
+| `guarded` | Environment checks first | Cache refresh, seed data, codegen |
+| `dangerous` | Explicit approval required | Migrations, deploys, backfills |
+
+Policies can also block dangerous operations in specific environments:
+
+```yaml
+policies:
+  - name: no-dangerous-in-ci
+    match:
+      safety: dangerous
+    deny_env: [CI]
+```
+
+## Project CLI Integration
+
+If your project has its own CLI (or you want to build one), Rivet can expose its commands as MCP tools:
+
+```yaml
+# .rivet/capabilities.yaml
+cli: ./bin/projectcli
+
+capabilities:
+  - name: db.patient-summary
+    description: Read-only patient summary
+    command: [query, patient-summary]
+    output: json
+    safety: safe
+    params:
+      - name: date_range
+        type: string
+        required: true
+```
+
+Claude calls `db.patient-summary` instead of writing SQL from vibes.
 
 ## Commands
 
 ```
-rivet init                    Initialize .rivet/ in your project
+rivet init                    Set up .rivet/, install hooks and skills
 rivet serve                   Start the MCP server (auto-started by Claude Code)
-rivet sync                    Update CLAUDE.md from .rivet/ config and context
-rivet doctor                  Check environment and dependencies
-rivet inspect capabilities    List registered capabilities with safety levels
-rivet run <capability>        Run a registered capability directly
-rivet context list            List context documents
-rivet context show <name>     Show a context document
-rivet context scaffold        Generate starter context docs from recon analysis
-rivet context recommend <q>   Find context docs relevant to a query
-rivet policy status           Show current policy configuration
-rivet project register-cli    Register a project CLI
+rivet sync                    Regenerate CLAUDE.md from your config and context
+rivet doctor                  Check that everything's wired up correctly
+rivet inspect capabilities    List what's registered and its safety level
+rivet run <capability>        Run a capability from the terminal
+rivet context list            List context docs
+rivet context show <name>     Read one
+rivet context scaffold        Generate starter docs from recon analysis
+rivet context recommend <q>   "What context is relevant to this task?"
+rivet context lint            Check docs for quality and staleness
+rivet policy status           Show active policies
+rivet project register-cli    Register your project CLI
 rivet project commands        List project CLI commands
 ```
 
 ## Claude Code Skills
 
-`rivet init` installs these skills (run them with `/` in Claude Code):
+Installed by `rivet init`, run them with `/` in Claude Code:
 
-- **`/rivet-setup`** — Full initialization: init, scaffold, fill context, sync
-- **`/rivet-fill-context`** — Fill out scaffolded context docs using recon analysis
-- **`/rivet-compact-context`** — Deduplicate learnings, prune stale info, keep docs concise
-
-## Architecture
-
-```
-Claude Code
-    │
-    ▼
-Rivet MCP Server (rivet serve)
-    │
-    ├── Project CLI commands     — named operations, not ad-hoc shell
-    ├── Recon                    — deterministic repo intelligence
-    ├── Context system           — domain knowledge as MCP resources
-    ├── Vaulty                   — secret-aware execution
-    └── Policy layer             — safety levels and approval gates
-    │
-    ▼
-Project Codebase
-```
-
-### Core Philosophy
-
-> Prefer explicit project capabilities over ad hoc shell use.
-
-> Deterministic facts first, AI judgment second.
-
-> Context is a built-in primitive, not an afterthought.
+- **`/rivet-setup`** — The full onboarding: init, scaffold, fill context, sync
+- **`/rivet-fill-context`** — Have Claude fill out placeholder context docs using recon
+- **`/rivet-compact-context`** — Consolidate learnings, prune stale info, keep docs tight
 
 ## Building
 
@@ -168,6 +228,18 @@ make install     # go install
 ```
 
 Requires Go 1.25+.
+
+## The Philosophy
+
+Three rules, in order:
+
+> Prefer explicit project capabilities over ad hoc shell use.
+
+> Deterministic facts first, AI judgment second.
+
+> Context is a built-in primitive, not an afterthought.
+
+The goal isn't to make the AI more autonomous. It's to make it less ignorant.
 
 ## License
 

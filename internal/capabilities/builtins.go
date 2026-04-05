@@ -117,6 +117,38 @@ func Builtins() []Capability {
 			Builtin:     true,
 			ArgsHint:    "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]",
 		},
+		{
+			Name:        "witness.run",
+			Kind:        KindTool,
+			Description: "Get the test runner command for changed files — returns a ready-to-execute command like 'mix test path1 path2' or 'go test ./pkg/...'. No args = use git diff. Args: [\"path/to/changed.ex\"]",
+			Command:     []string{"witness", "select", "--format", "exec"},
+			Output:      "text",
+			Safety:      SafetyLevelSafe,
+			Builtin:     true,
+			ArgsHint:    "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]",
+		},
+		{
+			Name:        "witness.staged",
+			Kind:        KindTool,
+			Description: "Select tests for staged git changes (pre-commit). Uses git diff --staged to detect files, then scores tests by dependency graph, co-change, and hotspots. No args needed.",
+			Command:     []string{"witness", "select", "--staged"},
+			Output:      "json",
+			Safety:      SafetyLevelSafe,
+			Builtin:     true,
+			ArgsHint:    "No arguments required — uses git diff --staged automatically",
+		},
+		{
+			Name:        "witness.since",
+			Kind:        KindTool,
+			Description: "Select tests for all changes since a git ref (branch point, tag, or commit). Useful for PR review — finds every test affected by the branch. Args: [\"main\"] or [\"v1.2.0\"] or [\"abc123\"]",
+			Command:     []string{"witness", "select"},
+			Output:      "json",
+			Safety:      SafetyLevelSafe,
+			Builtin:     true,
+			Params: []Param{
+				{Name: "ref", Type: "string", Required: true, Description: "Git ref to compare against (branch, tag, or commit SHA)", Flag: "--since"},
+			},
+		},
 		// --- Vaulty: secrets proxy ---
 		{
 			Name:        "vaulty.list",

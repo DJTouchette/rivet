@@ -2,7 +2,7 @@
 
 Your AI coding agent is smart. It's also completely clueless about your project.
 
-It doesn't know that the billing retry logic is split across two services. It doesn't know that `ServiceRenderedInsertTrigger` fires two queries and will absolutely ruin your day if you touch it wrong. It doesn't know your team's conventions, your pain points, or that one migration script that must never run on Tuesdays.
+It doesn't know that a critical retry workflow is split across two services. It doesn't know that a database trigger fires two queries and will absolutely ruin your day if you touch it wrong. It doesn't know your team's conventions, your pain points, or that one migration script that must never run on Tuesdays.
 
 So it improvises. It guesses at SQL. It greps around hoping to stumble on the right file. It reinvents your deploy script from scratch every single time.
 
@@ -48,8 +48,8 @@ Context docs live in `.rivet/context/` and come in three flavors:
 
 ```
 .rivet/context/
-  domains/         ← business areas (billing, auth, scheduling)
-  modules/         ← technical subsystems (patient-search, ledger-sync)
+  domains/         ← business areas (orders, auth, scheduling)
+  modules/         ← technical subsystems (search, ledger-sync)
   paradigms/       ← cross-cutting patterns (caching, event handling)
 ```
 
@@ -57,24 +57,24 @@ Each doc has frontmatter linking it to relevant files and tags:
 
 ```markdown
 ---
-tags: [billing, invoice, payment]
+tags: [orders, invoicing, retries]
 related_paths:
-  - backend/Handlers/PaymentGateway/**
+  - backend/Handlers/Workflow/**
   - clients/web/src/pages/Invoices/**
 ---
 
-# Billing
+# Orders & Invoicing
 
 ## Overview
-Handles invoice generation, retry logic, payment failure handling...
+Handles invoice generation, retry logic, and failure handling...
 
 ## Gotchas
-- Retry logic is split between the scheduler and payment adapter
+- Retry logic is split between the scheduler and the adapter
 - Status names in the DB don't match the API. Obviously.
 
 ## Learnings
-- 2026-04-01: ServiceRenderedInsertTrigger fires 2 queries per insert, watch for N+1
-- 2026-04-03: Hidden dependency on ThirdPartyCheck table for payment validation
+- 2026-04-01: A trigger fires 2 queries per insert, watch for N+1
+- 2026-04-03: Hidden dependency on ThirdPartyCheck table for validation
 ```
 
 The `## Learnings` section is where Claude appends new findings. When it grows too long, the `/rivet-compact-context` skill promotes the important stuff to permanent sections and clears the noise.
@@ -89,7 +89,7 @@ This is where it gets interesting.
 You start a task
     → Claude investigates using recon tools (grep, symbols, related files)
     → After a few searches, a hook nudges: "hey, check the context docs first"
-    → Claude reads the billing domain doc, finds the gotchas
+    → Claude reads the orders domain doc, finds the gotchas
     → Saves 10 minutes of blind exploration
     → Discovers something new during the task
     → Another hook nudges: "learned anything? write it down"
@@ -165,7 +165,7 @@ Secrets proxy for AI agents. The agent gets capabilities, not credentials.
 
 - Injects auth headers, env vars, bearer tokens without exposing values
 - Redacts secrets from all output (raw, base64, URL-encoded)
-- Policy enforcement: this key can only talk to `api.stripe.com`
+- Policy enforcement: this key can only talk to `api.vendor.com`
 - Full audit trail of every request
 
 Claude calls `vaulty.proxy` or `vaulty.exec` and never sees a raw secret.
@@ -199,9 +199,9 @@ If your project has its own CLI (or you want to build one), Rivet can expose its
 cli: ./bin/projectcli
 
 capabilities:
-  - name: db.revenue-summary
-    description: Read-only revenue summary
-    command: [query, revenue-summary]
+  - name: db.metrics-summary
+    description: Read-only metrics summary
+    command: [query, metrics-summary]
     output: json
     safety: safe
     params:

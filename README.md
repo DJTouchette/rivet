@@ -49,7 +49,7 @@ Context docs live in `.rivet/context/` and come in three flavors:
 ```
 .rivet/context/
   domains/         ← business areas (orders, auth, scheduling)
-  modules/         ← technical subsystems (search, ledger-sync)
+  modules/         ← technical subsystems (search, data-sync)
   paradigms/       ← cross-cutting patterns (caching, event handling)
 ```
 

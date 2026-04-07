@@ -216,6 +216,7 @@ Claude calls `db.revenue-summary` instead of writing SQL from vibes.
 
 ```
 rivet init                    Set up .rivet/, install hooks and skills
+rivet update                  Add any missing Rivet files without overwriting config.yaml
 rivet serve                   Start the MCP server (auto-started by Claude Code)
 rivet sync                    Regenerate CLAUDE.md from your config and context
 rivet doctor                  Check that everything's wired up correctly
@@ -238,6 +239,13 @@ Installed by `rivet init`, run them with `/` in Claude Code:
 - **`/rivet-setup`** : Full onboarding. Init, scaffold, fill context, sync.
 - **`/rivet-fill-context`** : Have Claude fill out placeholder context docs using recon.
 - **`/rivet-compact-context`** : Consolidate learnings, prune stale info, keep docs tight.
+
+## Claude Code Agents
+
+Installed by `rivet init` into `.claude/agents/`:
+
+- **`rivet-explorer`**: A strictly read-only investigation subagent. Tool access is limited to Claude read tools plus read-only Rivet MCP tools.
+- **`rivet-investigator`**: The same investigation workflow, but also allowed to call `rivet.learn` to record durable non-obvious findings in context docs.
 
 ## Building
 

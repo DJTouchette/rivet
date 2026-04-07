@@ -22,6 +22,9 @@ func TestGenerateClaudeMD_Empty(t *testing.T) {
 	if !strings.Contains(section, "No capabilities registered") {
 		t.Error("expected empty capabilities message")
 	}
+	if !strings.Contains(section, "rivet-explorer") {
+		t.Error("expected agent guidance in Rivet rules")
+	}
 }
 
 func TestGenerateClaudeMD_WithCaps(t *testing.T) {

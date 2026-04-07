@@ -32,6 +32,7 @@ func GenerateClaudeMD(caps []capabilities.Capability, docs []*rivetctx.Document)
 	// MCP usage rules.
 	b.WriteString("## Rivet Rules\n\n")
 	b.WriteString("Rivet is available as an MCP server. **Always check context docs before reaching for recon tools.**\n\n")
+	b.WriteString("If Claude Code project agents are available, use `rivet-explorer` for strictly read-only repo exploration and `rivet-investigator` when investigation may produce reusable findings worth saving with `rivet.learn`.\n\n")
 
 	// Tiered workflow.
 	b.WriteString("### Understand tasks (explain, audit, review, investigate)\n\n")

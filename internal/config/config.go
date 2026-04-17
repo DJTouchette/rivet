@@ -185,6 +185,40 @@ func StarterConfigYAML() []byte {
 
 capabilities: []
 
+# Schema — database intelligence.
+# Configure one or more read-only database connections. All queries Rivet makes
+# target system catalogs and stats views — never application data.
+#
+# Environment variables in user/password/dsn are expanded at runtime, so you
+# can reference secrets from your shell or vaulty instead of committing them.
+#
+# Example:
+# schema:
+#   databases:
+#     - name: prod
+#       engine: postgres            # postgres | mssql
+#       host: db.example.com
+#       port: 5432
+#       user: readonly
+#       password: ${SCHEMA_PW}      # expanded from env
+#       database: production
+#       sslmode: require            # postgres only
+#       default: true
+#     - name: prod-mssql
+#       engine: mssql
+#       host: sql.example.com
+#       port: 1433
+#       user: ${MSSQL_USER}
+#       password: ${MSSQL_PW}
+#       database: app_prod
+#   migrations:
+#     dir: ./db/migrations          # or dirs: [...] for multiple roots
+#     dialect: postgres             # optional hint
+#   code_scan:
+#     roots: [./src, ./backend]     # where to look for SQL-bearing source
+#     languages: [csharp, go]       # optional filter
+#     exclude: ["**/node_modules/**", "**/bin/**"]
+
 # Policies — rules that gate capability execution based on environment.
 # Each policy has a match (which capabilities it applies to) and constraints.
 #

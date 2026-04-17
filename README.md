@@ -141,6 +141,55 @@ Claude calls these instead of running raw `grep` and hoping for the best. Recon 
 | `recon.changes` | Recent git change summary |
 | `recon.refresh` | Incremental cache update |
 
+## Schema: Database Intelligence
+
+Read-only database awareness for the live DB plus your migrations and application code.
+
+- Connects over `database/sql` (pgx for Postgres, go-mssqldb for MSSQL) — only ever reads system catalogs and stats views
+- Reconstructs a static schema from on-disk migrations when no DB is reachable
+- Extracts SQL queries from C# (Dapper), Go (`database/sql`/sqlx/pgx), Python (psycopg/SQLAlchemy) and Node (pg/knex/prisma/tagged-template) sources
+- Detects **unused** indexes from `pg_stat_user_indexes` / `sys.dm_db_index_usage_stats`
+- Detects **redundant** indexes (column prefix of another index on the same table)
+- Suggests **missing** indexes by combining engine hints (`sys.dm_db_missing_index_details`, pg_qualstats) with WHERE/JOIN/ORDER BY columns found in code
+- Reports **coverage** — which queries hit which tables and whether their predicates land on an index
+
+Configure connections in `.rivet/config.yaml`:
+
+```yaml
+schema:
+  databases:
+    - name: prod
+      engine: postgres          # postgres | mssql
+      host: db.example.com
+      user: readonly
+      password: ${SCHEMA_PW}
+      database: production
+      default: true
+  migrations:
+    dir: ./db/migrations
+    dialect: postgres
+  code_scan:
+    roots: [./src, ./backend]
+    languages: [csharp, go]      # optional filter
+```
+
+**Tools exposed via MCP:**
+
+| Tool | What it does |
+|------|-------------|
+| `schema.overview` | Summary of configured databases + migration status |
+| `schema.tables` | Tables with row estimates and sizes |
+| `schema.describe` | Columns, indexes, FKs for one table |
+| `schema.indexes-list` | Every index in a database |
+| `schema.indexes-unused` | Indexes with zero reads (drop candidates) |
+| `schema.indexes-redundant` | Indexes covered by another on the same table |
+| `schema.indexes-missing` | Engine + code-analysis candidates to add |
+| `schema.queries-extracted` | SQL statements found in app source |
+| `schema.queries-slow` | Top expensive queries from the engine log |
+| `schema.coverage` | Which predicates land on an index |
+| `schema.migrations` | Static schema from SQL migration files |
+| `schema.refresh` | Re-pull catalog snapshots from all databases |
+
 ## Witness: Test Selection
 
 Smart test selection based on what actually changed.
@@ -228,6 +277,12 @@ rivet context scaffold        Generate starter docs from recon analysis
 rivet context recommend <q>   "What context is relevant to this task?"
 rivet context lint            Check docs for quality and staleness
 rivet policy status           Show active policies
+rivet schema overview         Configured databases + migration summary
+rivet schema tables           List tables
+rivet schema describe <tbl>   Columns, indexes, FKs for a table
+rivet schema indexes unused   Indexes with zero reads
+rivet schema indexes missing  Missing-index candidates (engine + code)
+rivet schema refresh          Re-pull catalog snapshots
 rivet project register-cli    Register your project CLI
 rivet project commands        List project CLI commands
 ```

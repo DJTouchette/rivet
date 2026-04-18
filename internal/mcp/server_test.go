@@ -48,7 +48,9 @@ func newTestServer(t *testing.T) *Server {
 		},
 	}
 
-	return NewServer(reg, exec, contexts, nil, "test", true)
+	s := NewServer(reg, exec, contexts, nil, "test", true)
+	s.SetLearningsDir(t.TempDir())
+	return s
 }
 
 // call sends a single JSON-RPC request to the server and returns the response.
@@ -564,7 +566,9 @@ func newServerWithRecon(t *testing.T) *Server {
 		Safety:  capabilities.SafetyLevelSafe,
 	})
 	exec := capabilities.NewExecutor(reg)
-	return NewServer(reg, exec, nil, nil, "test", true)
+	s := NewServer(reg, exec, nil, nil, "test", true)
+	s.SetLearningsDir(t.TempDir())
+	return s
 }
 
 func TestContextFirstNudge(t *testing.T) {
@@ -649,7 +653,7 @@ func TestLearnNudgeResetsAfterLearn(t *testing.T) {
 	}
 
 	// Now call rivet.learn — should reset counter.
-	call(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"rivet.learn","arguments":{"doc":"billing","learning":"test finding"}}}`)
+	call(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"rivet.learn","arguments":{"title":"Test Finding","observation":"a non-obvious finding"}}}`)
 
 	// Next recon call should NOT have nudge (counter reset to 0, now at 1).
 	resp := call(t, s, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"recon.search","arguments":{"args":["foo"]}}}`)
@@ -659,6 +663,68 @@ func TestLearnNudgeResetsAfterLearn(t *testing.T) {
 
 	if strings.Contains(result.Content[0].Text, "[rivet]") {
 		t.Error("nudge should NOT appear after rivet.learn reset")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rivet.learn handler
+// ---------------------------------------------------------------------------
+
+func TestLearnWritesLearningFile(t *testing.T) {
+	s := newServerWithRecon(t)
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.learn","arguments":{"title":"Retry Split","observation":"scheduler and adapter are separate","related_paths":["services/scheduler/**"]}}}`)
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.Content[0].Text)
+	}
+	if !strings.Contains(result.Content[0].Text, "Recorded learning") {
+		t.Errorf("expected 'Recorded learning' in response, got: %s", result.Content[0].Text)
+	}
+
+	entries, err := rivetctx.LoadLearnings(s.learningsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry in %s, got %d", s.learningsDir, len(entries))
+	}
+	if entries[0].Title != "Retry Split" {
+		t.Errorf("title mismatch: %q", entries[0].Title)
+	}
+	if len(entries[0].RelatedPaths) != 1 || entries[0].RelatedPaths[0] != "services/scheduler/**" {
+		t.Errorf("related_paths mismatch: %v", entries[0].RelatedPaths)
+	}
+}
+
+func TestLearnRequiresTitleAndObservation(t *testing.T) {
+	s := newServerWithRecon(t)
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.learn","arguments":{"observation":"missing title"}}}`)
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if !result.IsError {
+		t.Error("expected error for missing title")
+	}
+
+	resp = call(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rivet.learn","arguments":{"title":"missing observation"}}}`)
+	unmarshalResult(t, resp, &result)
+	if !result.IsError {
+		t.Error("expected error for missing observation")
+	}
+}
+
+func TestLearnRejectsUnknownSuggestedDoc(t *testing.T) {
+	s := newServerWithRecon(t)
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.learn","arguments":{"title":"t","observation":"o","suggested_doc":"not-a-real-doc"}}}`)
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if !result.IsError {
+		t.Error("expected error for unknown suggested_doc")
 	}
 }
 

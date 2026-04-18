@@ -173,24 +173,35 @@ if grep -q "rivet\.learn" "$transcript_path" 2>/dev/null; then
 fi
 
 # Output nudge as additionalContext so Claude sees it.
-echo "If you've discovered anything non-obvious during this investigation (hidden dependencies, performance traps, implicit ordering, gotchas), call rivet.learn to record it in the relevant context doc for future sessions."
+echo "If you've discovered anything non-obvious during this investigation (hidden dependencies, performance traps, implicit ordering, gotchas), call rivet.learn with a title and observation. The entry lands in .rivet/learnings/ and is later promoted into a context doc."
 `
 
 // compactCheckScript fires after any rivet MCP call.
-// Checks if learnings across context docs exceed the threshold.
+// Checks if the learning log has grown past the promotion threshold.
 const compactCheckScript = `#!/bin/bash
 # Rivet compact check — fires after rivet MCP tool calls.
-# If total learnings exceed threshold, nudge to compact.
+# If un-promoted learnings exceed threshold, nudge to promote.
 
-LEARNING_THRESHOLD=20
+LEARNING_THRESHOLD=10
 
-if [ ! -d ".rivet/context" ]; then
+if [ ! -d ".rivet/learnings" ]; then
   exit 0
 fi
 
-learning_count=$(grep -rEc "^- [0-9]{4}-[0-9]{2}-[0-9]{2}[: —]" .rivet/context/ 2>/dev/null | awk -F: '{s+=$NF} END {print s+0}')
+# Count *.md files directly under .rivet/learnings/ (exclude archive/) that
+# are not already marked as promoted.
+total=0
+promoted=0
+for f in .rivet/learnings/*.md; do
+  [ -f "$f" ] || continue
+  total=$((total+1))
+  if grep -q "^promoted: true" "$f" 2>/dev/null; then
+    promoted=$((promoted+1))
+  fi
+done
+active=$((total-promoted))
 
-if [ "$learning_count" -ge "$LEARNING_THRESHOLD" ]; then
-  echo "Context docs have accumulated ${learning_count} learnings (threshold: ${LEARNING_THRESHOLD}). Run /rivet-compact-context to deduplicate, promote important ones to Gotchas, and prune stale entries."
+if [ "$active" -ge "$LEARNING_THRESHOLD" ]; then
+  echo "Learning log has ${active} active entries (threshold: ${LEARNING_THRESHOLD}). Run /rivet-promote-learnings to review, merge, and promote high-value entries into context docs."
 fi
 `

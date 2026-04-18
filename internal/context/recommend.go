@@ -255,6 +255,102 @@ func scoreNameMatch(name, title string, tokens []string) (float64, string) {
 	return weight, "name-match"
 }
 
+// LearningRecommendation is a scored learning-log match. Learning matches sit
+// below context doc matches in priority — they're a fallback for recent or
+// emerging knowledge that hasn't been promoted yet.
+type LearningRecommendation struct {
+	Entry   *LearningEntry `json:"-"`
+	Name    string         `json:"name"`    // filename without .md
+	Title   string         `json:"title"`
+	Date    string         `json:"date"`
+	Score   float64        `json:"score"`
+	Signals []string       `json:"signals"`
+	Path    string         `json:"path"`
+}
+
+// RecommendLearnings returns active learning-log entries relevant to a query.
+// Promoted entries are excluded (their content has been absorbed into context
+// docs). Max results defaults to 5.
+func RecommendLearnings(entries []*LearningEntry, query string, maxResults int) []LearningRecommendation {
+	if maxResults <= 0 {
+		maxResults = 5
+	}
+	if query == "" || len(entries) == 0 {
+		return nil
+	}
+
+	tokens := tokenize(query)
+	isPath := looksLikePath(query)
+
+	var results []LearningRecommendation
+	for _, e := range entries {
+		if e.Promoted {
+			continue
+		}
+
+		var score float64
+		var signals []string
+
+		titleScore, titleSignal := scoreNameMatch(e.Title, e.Title, tokens)
+		if titleScore > 0 {
+			score += titleScore
+			signals = append(signals, titleSignal)
+		}
+
+		if isPath {
+			pathScore, pathSignal := scorePathMatch(e.RelatedPaths, query)
+			if pathScore > 0 {
+				score += pathScore
+				signals = append(signals, pathSignal)
+			}
+		}
+
+		bodyScore, bodySignal := scoreBodyMatch(e.Body, tokens)
+		if bodyScore > 0 {
+			score += bodyScore
+			signals = append(signals, bodySignal)
+		}
+
+		if score <= 0 {
+			continue
+		}
+		if score > 1.0 {
+			score = 1.0
+		}
+
+		name := strings.TrimSuffix(filepath.Base(e.Path), ".md")
+		date := ""
+		if !e.Date.IsZero() {
+			date = e.Date.Format("2006-01-02")
+		}
+		results = append(results, LearningRecommendation{
+			Entry:   e,
+			Name:    name,
+			Title:   e.Title,
+			Date:    date,
+			Score:   score,
+			Signals: signals,
+			Path:    e.Path,
+		})
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		// Tiebreak: newer first.
+		if !results[i].Entry.Date.Equal(results[j].Entry.Date) {
+			return results[i].Entry.Date.After(results[j].Entry.Date)
+		}
+		return results[i].Name < results[j].Name
+	})
+
+	if len(results) > maxResults {
+		results = results[:maxResults]
+	}
+	return results
+}
+
 // scoreBodyMatch checks if query tokens appear in the document body.
 func scoreBodyMatch(body string, tokens []string) (float64, string) {
 	if body == "" || len(tokens) == 0 {

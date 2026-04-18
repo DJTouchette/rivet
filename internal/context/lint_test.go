@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLintMissingTags(t *testing.T) {
@@ -208,6 +209,8 @@ func TestLintCleanDoc(t *testing.T) {
 		Path:         filepath.Join(root, "billing.md"),
 		Tags:         []string{"billing", "invoice"},
 		RelatedPaths: []string{"lib/billing/**"},
+		Owner:        "damien",
+		LastReviewed: time.Now().AddDate(0, 0, -1),
 		Body: `# Billing
 
 ## Overview
@@ -226,6 +229,78 @@ Handles invoice generation and payment retries.
 		for _, w := range result.Warnings {
 			t.Errorf("unexpected warning: [%s] %s: %s", w.Severity, w.Rule, w.Message)
 		}
+	}
+}
+
+func TestLintMissingOwner(t *testing.T) {
+	doc := &Document{
+		Name:         "billing",
+		Kind:         KindDomain,
+		Path:         "test/billing.md",
+		Tags:         []string{"billing"},
+		RelatedPaths: []string{"lib/billing/**"},
+		LastReviewed: time.Now(),
+		Body:         "# Billing\n\nHandles invoices.",
+	}
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "lib", "billing"), 0755)
+
+	result := Lint([]*Document{doc}, root)
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Rule == "missing-owner" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected missing-owner warning")
+	}
+}
+
+func TestLintStaleReview(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "lib", "billing"), 0755)
+
+	old := &Document{
+		Name:         "billing",
+		Kind:         KindDomain,
+		Path:         "test/billing.md",
+		Tags:         []string{"billing"},
+		RelatedPaths: []string{"lib/billing/**"},
+		Owner:        "damien",
+		LastReviewed: time.Now().AddDate(0, 0, -StaleReviewDays-1),
+		Body:         "# Billing\n\nHandles invoices.",
+	}
+	missing := &Document{
+		Name:         "auth",
+		Kind:         KindDomain,
+		Path:         "test/auth.md",
+		Tags:         []string{"auth"},
+		RelatedPaths: []string{"lib/billing/**"},
+		Owner:        "damien",
+		Body:         "# Auth\n\nHandles auth.",
+	}
+
+	result := Lint([]*Document{old, missing}, root)
+
+	oldStale, missingStale := false, false
+	for _, w := range result.Warnings {
+		if w.Rule != "stale-review" {
+			continue
+		}
+		switch w.Document {
+		case "billing":
+			oldStale = true
+		case "auth":
+			missingStale = true
+		}
+	}
+	if !oldStale {
+		t.Error("expected stale-review warning for old billing doc")
+	}
+	if !missingStale {
+		t.Error("expected stale-review warning for auth doc missing last_reviewed")
 	}
 }
 

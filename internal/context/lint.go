@@ -5,7 +5,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// StaleReviewDays is the number of days after which an unreviewed context doc
+// is flagged as stale.
+const StaleReviewDays = 90
 
 // Severity indicates how serious a lint warning is.
 type Severity string
@@ -64,6 +69,19 @@ func lintDoc(doc *Document, projectRoot string) []LintWarning {
 	// Rule: missing-related-paths — no related_paths in frontmatter.
 	if len(doc.RelatedPaths) == 0 {
 		add(SeverityWarning, "missing-related-paths", "no related_paths in frontmatter — add glob patterns to link this doc to source files")
+	}
+
+	// Rule: missing-owner — no owner in frontmatter.
+	if strings.TrimSpace(doc.Owner) == "" {
+		add(SeverityWarning, "missing-owner", "no owner in frontmatter — add an owner responsible for keeping this doc accurate")
+	}
+
+	// Rule: stale-review — last_reviewed is older than StaleReviewDays, or missing.
+	if doc.LastReviewed.IsZero() {
+		add(SeverityWarning, "stale-review", "no last_reviewed date in frontmatter — add one so staleness can be tracked")
+	} else if age := int(time.Since(doc.LastReviewed).Hours() / 24); age > StaleReviewDays {
+		add(SeverityWarning, "stale-review",
+			fmt.Sprintf("last reviewed %d days ago (threshold: %d) — re-review and update last_reviewed", age, StaleReviewDays))
 	}
 
 	// Rule: placeholder-section — unfilled HTML comment placeholders.

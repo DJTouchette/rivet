@@ -123,22 +123,43 @@ To add tags and related_paths, use frontmatter in context documents:
 			query := strings.Join(args, " ")
 			recs := rivetctx.Recommend(docs, query, maxResults)
 
+			learnings, _ := rivetctx.LoadLearnings(".rivet/learnings")
+			learnRecs := rivetctx.RecommendLearnings(learnings, query, maxResults)
+
 			if jsonOutput {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(recs)
+				return enc.Encode(map[string]interface{}{
+					"context":   recs,
+					"learnings": learnRecs,
+				})
 			}
 
-			if len(recs) == 0 {
-				fmt.Printf("No context documents match %q\n", query)
+			if len(recs) == 0 && len(learnRecs) == 0 {
+				fmt.Printf("No context documents or learning entries match %q\n", query)
 				return nil
 			}
 
-			fmt.Printf("Recommended context for %q:\n\n", query)
-			for _, r := range recs {
-				fmt.Printf("  %.2f  [%s] %s — %s\n", r.Score, r.Kind, r.Name, r.Title)
-				fmt.Printf("        signals: %s\n", strings.Join(r.Signals, ", "))
-				fmt.Printf("        uri: %s\n\n", r.URI)
+			if len(recs) > 0 {
+				fmt.Printf("Recommended context for %q:\n\n", query)
+				for _, r := range recs {
+					fmt.Printf("  %.2f  [%s] %s — %s\n", r.Score, r.Kind, r.Name, r.Title)
+					fmt.Printf("        signals: %s\n", strings.Join(r.Signals, ", "))
+					fmt.Printf("        uri: %s\n\n", r.URI)
+				}
+			}
+
+			if len(learnRecs) > 0 {
+				fmt.Printf("Related learning log entries (unverified):\n\n")
+				for _, r := range learnRecs {
+					date := r.Date
+					if date == "" {
+						date = "—"
+					}
+					fmt.Printf("  %.2f  [learning %s] %s\n", r.Score, date, r.Title)
+					fmt.Printf("        signals: %s\n", strings.Join(r.Signals, ", "))
+					fmt.Printf("        path: %s\n\n", r.Path)
+				}
 			}
 			return nil
 		},

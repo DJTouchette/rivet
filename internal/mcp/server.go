@@ -152,29 +152,22 @@ const contextFirstMessage = "\n\n---\n[rivet] You're using recon tools without r
 const learnNudgeMessage = "\n\n---\n[rivet] You have made multiple recon calls without calling rivet.learn. " +
 	"You MUST record non-obvious findings — hidden dependencies, performance traps, " +
 	"implicit ordering, gotchas — so future sessions don't rediscover them. " +
-	"Call rivet.learn now with the relevant context doc name and a concise finding."
+	"Call rivet.learn now with a title and observation; entries land in .rivet/learnings/ " +
+	"and are later promoted into context docs."
 
-// consolidateLearningsThreshold is the number of learnings in a single doc
-// before the server tells Claude to consolidate.
-const consolidateLearningsThreshold = 8
+// defaultLearningsDir is where the MCP server writes learning-log entries.
+const defaultLearningsDir = ".rivet/learnings"
 
-// consolidateLinesThreshold is the total line count of a doc before
-// the server tells Claude to consolidate.
-const consolidateLinesThreshold = 60
+// promoteLearningsThreshold is the number of active (un-promoted) learning
+// entries before the server nudges Claude to run a promotion review.
+const promoteLearningsThreshold = 10
 
-// consolidateMessage is appended to the rivet.learn response when
-// a doc exceeds size thresholds.
-const consolidateMessage = `
+// promoteMessage is appended to the rivet.learn response when the learning log
+// grows past the threshold.
+const promoteMessage = `
 
 ---
-[rivet] The "%s" context doc is getting long (%d learnings, %d lines). You MUST consolidate it now:
-
-1. Read the full doc with rivet.context-show
-2. Promote the most important learnings into the Gotchas section as permanent entries
-3. Remove learnings that are now covered by Gotchas or are duplicates
-4. Remove any learnings that are obvious from the code or no longer accurate
-5. Keep the doc under 50 lines of content (excluding frontmatter)
-6. Write the consolidated doc back to .rivet/context/domains/%s.md`
+[rivet] The learning log has %d active entries (threshold: %d). Review them and promote the high-value ones into context docs. Run /rivet-promote-learnings, or use rivet.context-learnings-list to inspect.`
 
 // reconInvestigationTools are the recon tools that indicate active investigation
 // (not just a refresh or overview).
@@ -187,13 +180,14 @@ var reconInvestigationTools = map[string]bool{
 }
 
 type Server struct {
-	registry    *capabilities.Registry
-	executor    *capabilities.Executor
-	contexts    []*rivetctx.Document
-	policies    []policy.Rule
-	version     string
-	logger      *log.Logger
-	autoCompact bool // whether to nudge consolidation when docs get long
+	registry     *capabilities.Registry
+	executor     *capabilities.Executor
+	contexts     []*rivetctx.Document
+	policies     []policy.Rule
+	version      string
+	logger       *log.Logger
+	autoCompact  bool   // whether to nudge promotion when the log gets long
+	learningsDir string // where rivet.learn writes entries
 
 	// Session state for nudging.
 	reconCallsSinceLearn int
@@ -204,14 +198,21 @@ type Server struct {
 // and context documents.
 func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts []*rivetctx.Document, policies []policy.Rule, version string, autoCompact bool) *Server {
 	return &Server{
-		registry:    reg,
-		executor:    exec,
-		contexts:    contexts,
-		policies:    policies,
-		version:     version,
-		autoCompact: autoCompact,
-		logger:      log.New(io.Discard, "", 0),
+		registry:     reg,
+		executor:     exec,
+		contexts:     contexts,
+		policies:     policies,
+		version:      version,
+		autoCompact:  autoCompact,
+		learningsDir: defaultLearningsDir,
+		logger:       log.New(io.Discard, "", 0),
 	}
+}
+
+// SetLearningsDir overrides the directory where rivet.learn writes entries.
+// Used by tests; production code uses the default.
+func (s *Server) SetLearningsDir(dir string) {
+	s.learningsDir = dir
 }
 
 // SetLogger sets a logger for debug output (written to stderr, never stdout).
@@ -368,19 +369,45 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		Tool{
 			Name:        "rivet.learn",
-			Description: "[guarded] Record a non-obvious finding to a context document. Call this after discovering something that would help future investigations — hidden dependencies, performance traps, implicit ordering, gotchas.",
+			Description: "[guarded] Record a non-obvious finding to the learning log at .rivet/learnings/. One file per entry (parallel-safe). Entries are later promoted into context docs via /rivet-promote-learnings.",
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
-					"doc": map[string]interface{}{
+					"title": map[string]interface{}{
 						"type":        "string",
-						"description": "Name of the context document to append to (e.g. 'billing', 'accounts')",
+						"description": "Short, specific title. Example: 'ServiceRenderedInsertTrigger fires 5 queries per insert'",
 					},
-					"learning": map[string]interface{}{
+					"observation": map[string]interface{}{
 						"type":        "string",
-						"description": "A concise, single-line finding. Example: 'ServiceRenderedInsertTrigger fires 2 queries (CheckForThirdParties) + 3-table join (AddTax) on every insert'",
+						"description": "What you found — the non-obvious fact.",
+					},
+					"impact": map[string]interface{}{
+						"type":        "string",
+						"description": "Why it matters / where it bites (optional).",
+					},
+					"recommendation": map[string]interface{}{
+						"type":        "string",
+						"description": "What future sessions should do about it (optional).",
+					},
+					"related_paths": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Glob patterns pointing to affected source files (optional).",
+					},
+					"suggested_doc": map[string]interface{}{
+						"type":        "string",
+						"description": "Context doc name this learning is a candidate to promote into (optional).",
+					},
+					"confidence": map[string]interface{}{
+						"type":        "string",
+						"description": "low | medium | high (optional).",
+					},
+					"author": map[string]interface{}{
+						"type":        "string",
+						"description": "Author of the entry (optional).",
 					},
 				},
+				Required: []string{"title", "observation"},
 			},
 		},
 	)
@@ -426,9 +453,7 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.handleContextRecommend(req, query)
 	case "rivet.learn":
 		s.reconCallsSinceLearn = 0
-		doc, _ := params.Arguments["doc"].(string)
-		learning, _ := params.Arguments["learning"].(string)
-		return s.handleLearn(req, doc, learning)
+		return s.handleLearn(req, params.Arguments)
 	}
 
 	// Track recon investigation calls for learn nudging.
@@ -638,66 +663,65 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 	}
 }
 
-func (s *Server) handleLearn(req *Request, docName, learning string) *Response {
-	if docName == "" {
+func (s *Server) handleLearn(req *Request, args map[string]interface{}) *Response {
+	title := strings.TrimSpace(stringArg(args, "title"))
+	observation := strings.TrimSpace(stringArg(args, "observation"))
+
+	errResp := func(msg string) *Response {
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
 			Result: ToolCallResult{
-				Content: []ContentItem{{Type: "text", Text: "Error: 'doc' argument is required"}},
-				IsError: true,
-			},
-		}
-	}
-	if learning == "" {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolCallResult{
-				Content: []ContentItem{{Type: "text", Text: "Error: 'learning' argument is required"}},
+				Content: []ContentItem{{Type: "text", Text: msg}},
 				IsError: true,
 			},
 		}
 	}
 
-	// Find the context document.
-	var doc *rivetctx.Document
-	for _, d := range s.contexts {
-		if d.Name == docName {
-			doc = d
-			break
-		}
+	if title == "" {
+		return errResp("Error: 'title' argument is required")
 	}
-	if doc == nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolCallResult{
-				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error: context document %q not found. Use rivet.context-list to see available documents.", docName)}},
-				IsError: true,
-			},
-		}
+	if observation == "" {
+		return errResp("Error: 'observation' argument is required")
 	}
 
-	// Append to the file.
-	if err := rivetctx.AppendLearning(doc.Path, learning); err != nil {
-		return &Response{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Result: ToolCallResult{
-				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error writing learning: %v", err)}},
-				IsError: true,
-			},
+	// Accept either a suggested_doc hint or the legacy 'doc' arg.
+	suggested := stringArg(args, "suggested_doc")
+	if suggested == "" {
+		suggested = stringArg(args, "doc")
+	}
+	if suggested != "" {
+		known := false
+		for _, d := range s.contexts {
+			if d.Name == suggested {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return errResp(fmt.Sprintf("Error: suggested_doc %q not found. Use rivet.context-list to see available documents, or omit suggested_doc.", suggested))
 		}
 	}
 
-	text := fmt.Sprintf("Recorded learning in %s: %s", docName, learning)
+	entry, err := rivetctx.CreateLearning(s.learningsDir, rivetctx.NewLearning{
+		Title:          title,
+		Author:         stringArg(args, "author"),
+		Confidence:     stringArg(args, "confidence"),
+		SuggestedDoc:   suggested,
+		RelatedPaths:   stringSliceArg(args, "related_paths"),
+		Observation:    observation,
+		Impact:         stringArg(args, "impact"),
+		Recommendation: stringArg(args, "recommendation"),
+	})
+	if err != nil {
+		return errResp(fmt.Sprintf("Error writing learning: %v", err))
+	}
 
-	// Check if doc needs consolidation (only nudge if auto_compact is enabled).
+	text := fmt.Sprintf("Recorded learning: %s\nPath: %s", title, entry.Path)
+
 	if s.autoCompact {
-		stats := rivetctx.GetDocStats(doc.Path)
-		if stats.Learnings >= consolidateLearningsThreshold || stats.Lines >= consolidateLinesThreshold {
-			text += fmt.Sprintf(consolidateMessage, docName, stats.Learnings, stats.Lines, docName)
+		if n := rivetctx.CountActive(s.learningsDir); n >= promoteLearningsThreshold {
+			text += fmt.Sprintf(promoteMessage, n, promoteLearningsThreshold)
 		}
 	}
 
@@ -706,6 +730,40 @@ func (s *Server) handleLearn(req *Request, docName, learning string) *Response {
 		ID:      req.ID,
 		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: text}}},
 	}
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	if v, ok := args[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func stringSliceArg(args map[string]interface{}, key string) []string {
+	v, ok := args[key]
+	if !ok {
+		return nil
+	}
+	switch vv := v.(type) {
+	case []string:
+		return vv
+	case []interface{}:
+		out := make([]string, 0, len(vv))
+		for _, it := range vv {
+			if s, ok := it.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if vv == "" {
+			return nil
+		}
+		return []string{vv}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

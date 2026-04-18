@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Kind represents the category of a context document.
@@ -19,14 +20,16 @@ const (
 
 // Document is a loaded context document from .rivet/context/.
 type Document struct {
-	Name         string   // filename without extension (e.g. "billing")
-	Kind         Kind     // domain, module, or paradigm
-	Title        string   // first # heading, or Name if none found
-	Tags         []string // from frontmatter: tags
-	RelatedPaths []string // from frontmatter: related_paths (glob patterns)
-	Body         string   // markdown content (after frontmatter)
-	RawBody      string   // full file content including frontmatter
-	Path         string   // filesystem path
+	Name         string    // filename without extension (e.g. "billing")
+	Kind         Kind      // domain, module, or paradigm
+	Title        string    // first # heading, or Name if none found
+	Tags         []string  // from frontmatter: tags
+	RelatedPaths []string  // from frontmatter: related_paths (glob patterns)
+	Owner        string    // from frontmatter: owner (person/team responsible)
+	LastReviewed time.Time // from frontmatter: last_reviewed (YYYY-MM-DD)
+	Body         string    // markdown content (after frontmatter)
+	RawBody      string    // full file content including frontmatter
+	Path         string    // filesystem path
 }
 
 // URI returns the MCP resource URI for this document.
@@ -72,19 +75,26 @@ func Load(baseDir string) ([]*Document, error) {
 
 			name := strings.TrimSuffix(entry.Name(), ".md")
 			raw := string(body)
-			tags, relatedPaths, content := parseFrontmatter(raw)
+			fm, content := parseFrontmatter(raw)
 			title := extractTitle(content, name)
 
-			docs = append(docs, &Document{
+			doc := &Document{
 				Name:         name,
 				Kind:         kd.kind,
 				Title:        title,
-				Tags:         tags,
-				RelatedPaths: relatedPaths,
+				Tags:         fm.tags,
+				RelatedPaths: fm.relatedPaths,
+				Owner:        fm.owner,
 				Body:         content,
 				RawBody:      raw,
 				Path:         path,
-			})
+			}
+			if fm.lastReviewed != "" {
+				if t, err := time.Parse("2006-01-02", fm.lastReviewed); err == nil {
+					doc.LastReviewed = t
+				}
+			}
+			docs = append(docs, doc)
 		}
 	}
 
@@ -109,15 +119,23 @@ func extractTitle(body, fallback string) string {
 	return fallback
 }
 
+// frontmatter holds the parsed fields from a context doc's YAML frontmatter.
+type frontmatter struct {
+	tags         []string
+	relatedPaths []string
+	owner        string
+	lastReviewed string
+}
+
 // parseFrontmatter extracts YAML frontmatter from markdown content.
-// Returns tags, related_paths, and the body after frontmatter.
-// If no frontmatter is present, returns nil slices and the original body.
-func parseFrontmatter(raw string) (tags []string, relatedPaths []string, body string) {
+// Returns the parsed fields and the body after frontmatter.
+// If no frontmatter is present, returns a zero frontmatter and the original body.
+func parseFrontmatter(raw string) (frontmatter, string) {
+	var fm frontmatter
 	if !strings.HasPrefix(strings.TrimSpace(raw), "---") {
-		return nil, nil, raw
+		return fm, raw
 	}
 
-	// Find the closing ---
 	lines := strings.Split(raw, "\n")
 	startIdx := -1
 	endIdx := -1
@@ -134,10 +152,9 @@ func parseFrontmatter(raw string) (tags []string, relatedPaths []string, body st
 	}
 
 	if startIdx == -1 || endIdx == -1 {
-		return nil, nil, raw
+		return fm, raw
 	}
 
-	// Parse frontmatter lines (simple key: value and list items)
 	var currentKey string
 	for _, line := range lines[startIdx+1 : endIdx] {
 		trimmed := strings.TrimSpace(line)
@@ -147,57 +164,57 @@ func parseFrontmatter(raw string) (tags []string, relatedPaths []string, body st
 
 		// List item: "  - value"
 		if strings.HasPrefix(trimmed, "- ") {
-			val := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
-			val = strings.Trim(val, "\"'")
+			val := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")), "\"'")
 			switch currentKey {
 			case "tags":
-				tags = append(tags, val)
+				fm.tags = append(fm.tags, val)
 			case "related_paths":
-				relatedPaths = append(relatedPaths, val)
+				fm.relatedPaths = append(fm.relatedPaths, val)
 			}
 			continue
 		}
 
-		// Key: value or Key: [inline list]
-		if idx := strings.Index(trimmed, ":"); idx > 0 {
-			currentKey = strings.TrimSpace(trimmed[:idx])
-			valPart := strings.TrimSpace(trimmed[idx+1:])
+		idx := strings.Index(trimmed, ":")
+		if idx <= 0 {
+			continue
+		}
+		currentKey = strings.TrimSpace(trimmed[:idx])
+		valPart := strings.TrimSpace(trimmed[idx+1:])
 
-			// Inline list: tags: [billing, invoice, payment]
-			if strings.HasPrefix(valPart, "[") && strings.HasSuffix(valPart, "]") {
-				inner := valPart[1 : len(valPart)-1]
-				for _, item := range strings.Split(inner, ",") {
-					item = strings.TrimSpace(item)
-					item = strings.Trim(item, "\"'")
-					if item == "" {
-						continue
-					}
-					switch currentKey {
-					case "tags":
-						tags = append(tags, item)
-					case "related_paths":
-						relatedPaths = append(relatedPaths, item)
-					}
+		// Inline list: tags: [billing, invoice, payment]
+		if strings.HasPrefix(valPart, "[") && strings.HasSuffix(valPart, "]") {
+			inner := valPart[1 : len(valPart)-1]
+			for _, item := range strings.Split(inner, ",") {
+				item = strings.Trim(strings.TrimSpace(item), "\"'")
+				if item == "" {
+					continue
 				}
-				continue
-			}
-
-			// Single value on same line (not a list)
-			if valPart != "" {
-				valPart = strings.Trim(valPart, "\"'")
 				switch currentKey {
 				case "tags":
-					tags = append(tags, valPart)
+					fm.tags = append(fm.tags, item)
 				case "related_paths":
-					relatedPaths = append(relatedPaths, valPart)
+					fm.relatedPaths = append(fm.relatedPaths, item)
 				}
 			}
+			continue
+		}
+
+		if valPart == "" {
+			continue
+		}
+		valPart = strings.Trim(valPart, "\"'")
+		switch currentKey {
+		case "tags":
+			fm.tags = append(fm.tags, valPart)
+		case "related_paths":
+			fm.relatedPaths = append(fm.relatedPaths, valPart)
+		case "owner":
+			fm.owner = valPart
+		case "last_reviewed":
+			fm.lastReviewed = valPart
 		}
 	}
 
-	// Body is everything after the closing ---
-	body = strings.Join(lines[endIdx+1:], "\n")
-	body = strings.TrimLeft(body, "\n")
-
-	return tags, relatedPaths, body
+	body := strings.TrimLeft(strings.Join(lines[endIdx+1:], "\n"), "\n")
+	return fm, body
 }

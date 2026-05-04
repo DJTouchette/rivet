@@ -8,8 +8,48 @@ import (
 
 	"github.com/djtouchette/rivet/internal/capabilities"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/pins"
 	"github.com/djtouchette/rivet/internal/policy"
 )
+
+type fakePinProvider struct {
+	src     string
+	items   []pins.Item
+	pinned  map[string]string // id -> note
+	pinErr  error
+}
+
+func newFakePinProvider(src string) *fakePinProvider {
+	return &fakePinProvider{src: src, pinned: map[string]string{}}
+}
+
+func (f *fakePinProvider) Source() string { return f.src }
+func (f *fakePinProvider) List() ([]pins.Item, error) {
+	out := append([]pins.Item(nil), f.items...)
+	for id, note := range f.pinned {
+		out = append(out, pins.Item{URI: f.src + "://pinned/" + id, Name: id, Description: note})
+	}
+	return out, nil
+}
+func (f *fakePinProvider) Read(uri string) (pins.Item, error) {
+	for _, it := range f.items {
+		if it.URI == uri {
+			return it, nil
+		}
+	}
+	return pins.Item{}, fmt.Errorf("not found: %s", uri)
+}
+func (f *fakePinProvider) Pin(id, note string) error {
+	if f.pinErr != nil {
+		return f.pinErr
+	}
+	f.pinned[id] = note
+	return nil
+}
+func (f *fakePinProvider) Unpin(id string) error {
+	delete(f.pinned, id)
+	return nil
+}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -48,7 +88,7 @@ func newTestServer(t *testing.T) *Server {
 		},
 	}
 
-	s := NewServer(reg, exec, contexts, nil, "test", true)
+	s := NewServer(reg, exec, contexts, nil, nil, "test", true)
 	s.SetLearningsDir(t.TempDir())
 	return s
 }
@@ -130,9 +170,9 @@ func TestToolsList(t *testing.T) {
 	var result toolsListResult
 	unmarshalResult(t, resp, &result)
 
-	// 4 built-in rivet tools + 2 registry capabilities = 6
-	if len(result.Tools) != 6 {
-		t.Fatalf("expected 6 tools, got %d", len(result.Tools))
+	// 4 rivet tools + 2 rally pin tools + 2 registry capabilities = 8
+	if len(result.Tools) != 8 {
+		t.Fatalf("expected 8 tools, got %d", len(result.Tools))
 	}
 
 	// Built-in rivet tools come first
@@ -149,23 +189,29 @@ func TestToolsList(t *testing.T) {
 	if result.Tools[3].Name != "rivet.learn" {
 		t.Errorf("expected fourth tool 'rivet.learn', got %q", result.Tools[3].Name)
 	}
+	if result.Tools[4].Name != "rally.pin" {
+		t.Errorf("expected fifth tool 'rally.pin', got %q", result.Tools[4].Name)
+	}
+	if result.Tools[5].Name != "rally.unpin" {
+		t.Errorf("expected sixth tool 'rally.unpin', got %q", result.Tools[5].Name)
+	}
 
 	// Registry capabilities follow (sorted by name)
-	if result.Tools[4].Name != "danger-cmd" {
-		t.Errorf("expected fifth tool 'danger-cmd', got %q", result.Tools[4].Name)
+	if result.Tools[6].Name != "danger-cmd" {
+		t.Errorf("expected seventh tool 'danger-cmd', got %q", result.Tools[6].Name)
 	}
-	if result.Tools[5].Name != "echo-test" {
-		t.Errorf("expected sixth tool 'echo-test', got %q", result.Tools[5].Name)
+	if result.Tools[7].Name != "echo-test" {
+		t.Errorf("expected eighth tool 'echo-test', got %q", result.Tools[7].Name)
 	}
 
 	// Dangerous tool should have approve property
-	dangerTool := result.Tools[4]
+	dangerTool := result.Tools[6]
 	if _, ok := dangerTool.InputSchema.Properties["approve"]; !ok {
 		t.Error("dangerous tool should have 'approve' property in schema")
 	}
 
 	// Safe tool should NOT have approve property
-	safeTool := result.Tools[5]
+	safeTool := result.Tools[7]
 	if _, ok := safeTool.InputSchema.Properties["approve"]; ok {
 		t.Error("safe tool should not have 'approve' property in schema")
 	}
@@ -325,7 +371,7 @@ func TestContextListTool(t *testing.T) {
 func TestContextListToolEmpty(t *testing.T) {
 	reg := capabilities.NewRegistry()
 	exec := capabilities.NewExecutor(reg)
-	s := NewServer(reg, exec, nil, nil, "test", true)
+	s := NewServer(reg, exec, nil, nil, nil, "test", true)
 
 	resp := call(t, s, `{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"rivet.context-list","arguments":{}}}`)
 
@@ -421,7 +467,7 @@ func TestResourcesList(t *testing.T) {
 func TestResourcesListEmpty(t *testing.T) {
 	reg := capabilities.NewRegistry()
 	exec := capabilities.NewExecutor(reg)
-	s := NewServer(reg, exec, nil, nil, "test", true)
+	s := NewServer(reg, exec, nil, nil, nil, "test", true)
 
 	resp := call(t, s, `{"jsonrpc":"2.0","id":6,"method":"resources/list","params":{}}`)
 
@@ -519,7 +565,7 @@ func TestToolsCallBlockedByPolicy(t *testing.T) {
 			RequireEnv: []string{"NEVER_SET_XYZ_TEST_ONLY"},
 		},
 	}
-	s := NewServer(reg, exec, nil, policies, "test", true)
+	s := NewServer(reg, exec, nil, nil, policies, "test", true)
 
 	resp := call(t, s, `{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"gated-cmd","arguments":{"approve":true}}}`)
 
@@ -566,7 +612,7 @@ func newServerWithRecon(t *testing.T) *Server {
 		Safety:  capabilities.SafetyLevelSafe,
 	})
 	exec := capabilities.NewExecutor(reg)
-	s := NewServer(reg, exec, nil, nil, "test", true)
+	s := NewServer(reg, exec, nil, nil, nil, "test", true)
 	s.SetLearningsDir(t.TempDir())
 	return s
 }
@@ -638,8 +684,8 @@ func TestLearnNudgeShownAtThreshold(t *testing.T) {
 	if !strings.Contains(result.Content[0].Text, "[rivet]") {
 		t.Error("nudge should appear at threshold")
 	}
-	if !strings.Contains(result.Content[0].Text, "rivet.learn") {
-		t.Error("nudge should mention rivet.learn")
+	if !strings.Contains(result.Content[0].Text, "rivet-learner") {
+		t.Error("nudge should mention rivet-learner agent")
 	}
 }
 
@@ -801,5 +847,64 @@ func TestServeMultipleMessages(t *testing.T) {
 		if resp.Error != nil {
 			t.Errorf("line %d: unexpected error: %+v", i, resp.Error)
 		}
+	}
+}
+
+func TestRallyPinTool(t *testing.T) {
+	reg := capabilities.NewRegistry()
+	exec := capabilities.NewExecutor(reg)
+	pinReg := pins.NewRegistry()
+	fake := newFakePinProvider("rally")
+	pinReg.Add(fake)
+
+	s := NewServer(reg, exec, nil, pinReg, nil, "test", true)
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rally.pin","arguments":{"id":"RAL-1","note":"WIP"}}}`)
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if result.IsError {
+		t.Fatalf("rally.pin returned error: %+v", result.Content)
+	}
+	if note, ok := fake.pinned["RAL-1"]; !ok || note != "WIP" {
+		t.Fatalf("expected RAL-1 pinned with note WIP, got %+v", fake.pinned)
+	}
+
+	resp = call(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rally.unpin","arguments":{"id":"RAL-1"}}}`)
+	unmarshalResult(t, resp, &result)
+	if result.IsError {
+		t.Fatalf("rally.unpin returned error: %+v", result.Content)
+	}
+	if _, ok := fake.pinned["RAL-1"]; ok {
+		t.Fatal("RAL-1 should be unpinned")
+	}
+}
+
+func TestRallyPinTool_MissingID(t *testing.T) {
+	reg := capabilities.NewRegistry()
+	exec := capabilities.NewExecutor(reg)
+	pinReg := pins.NewRegistry()
+	pinReg.Add(newFakePinProvider("rally"))
+
+	s := NewServer(reg, exec, nil, pinReg, nil, "test", true)
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rally.pin","arguments":{}}}`)
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if !result.IsError {
+		t.Fatal("expected IsError when id is missing")
+	}
+}
+
+func TestRallyPinTool_NoRegistry(t *testing.T) {
+	reg := capabilities.NewRegistry()
+	exec := capabilities.NewExecutor(reg)
+
+	s := NewServer(reg, exec, nil, nil, nil, "test", true)
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rally.pin","arguments":{"id":"RAL-1"}}}`)
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if !result.IsError {
+		t.Fatal("expected IsError when pin registry is nil")
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/djtouchette/rivet/internal/capabilities"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/pins"
 	"github.com/djtouchette/rivet/internal/policy"
 )
 
@@ -149,7 +150,7 @@ const contextFirstMessage = "\n\n---\n[rivet] You're using recon tools without r
 
 // learnNudgeMessage is appended to recon tool responses when the
 // threshold is reached without a rivet.learn call.
-const learnNudgeMessage = "\n\n---\n[rivet] You have made multiple recon calls without calling rivet.learn. " +
+const learnNudgeMessage = "\n\n---\n[rivet] You have made multiple recon calls without recording findings. " +
 	"You MUST record non-obvious findings — hidden dependencies, performance traps, " +
 	"implicit ordering, gotchas — so future sessions don't rediscover them. " +
 	"Call rivet.learn now with a title and observation; entries land in .rivet/learnings/ " +
@@ -183,6 +184,7 @@ type Server struct {
 	registry     *capabilities.Registry
 	executor     *capabilities.Executor
 	contexts     []*rivetctx.Document
+	pins         *pins.Registry
 	policies     []policy.Rule
 	version      string
 	logger       *log.Logger
@@ -195,12 +197,14 @@ type Server struct {
 }
 
 // NewServer creates an MCP server backed by the given registry, executor,
-// and context documents.
-func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts []*rivetctx.Document, policies []policy.Rule, version string, autoCompact bool) *Server {
+// context documents, and pin registry. pinRegistry may be nil to disable
+// pinned-resource exposure.
+func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts []*rivetctx.Document, pinRegistry *pins.Registry, policies []policy.Rule, version string, autoCompact bool) *Server {
 	return &Server{
 		registry:     reg,
 		executor:     exec,
 		contexts:     contexts,
+		pins:         pinRegistry,
 		policies:     policies,
 		version:      version,
 		autoCompact:  autoCompact,
@@ -410,6 +414,38 @@ func (s *Server) handleToolsList(req *Request) *Response {
 				Required: []string{"title", "observation"},
 			},
 		},
+		Tool{
+			Name:        "rally.pin",
+			Description: "[safe] Pin a rally ticket so it stays injected into chat context across turns. Use when starting work on a ticket the user has named.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "Ticket ID (e.g. 'RAL-123', 'PROJ-7')",
+					},
+					"note": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional short note for why this ticket is pinned",
+					},
+				},
+				Required: []string{"id"},
+			},
+		},
+		Tool{
+			Name:        "rally.unpin",
+			Description: "[safe] Remove a rally ticket from the pinned set so it stops being injected into chat context.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "Ticket ID to unpin",
+					},
+				},
+				Required: []string{"id"},
+			},
+		},
 	)
 
 	// Registered capabilities.
@@ -454,6 +490,13 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "rivet.learn":
 		s.reconCallsSinceLearn = 0
 		return s.handleLearn(req, params.Arguments)
+	case "rally.pin":
+		id, _ := params.Arguments["id"].(string)
+		note, _ := params.Arguments["note"].(string)
+		return s.handlePin(req, "rally", id, note)
+	case "rally.unpin":
+		id, _ := params.Arguments["id"].(string)
+		return s.handleUnpin(req, "rally", id)
 	}
 
 	// Track recon investigation calls for learn nudging.
@@ -528,6 +571,20 @@ func (s *Server) handleResourcesList(req *Request) *Response {
 			MimeType:    "text/markdown",
 		})
 	}
+	if s.pins != nil {
+		items, err := s.pins.List()
+		if err != nil {
+			s.logger.Printf("pins list: %v", err)
+		}
+		for _, it := range items {
+			resources = append(resources, Resource{
+				URI:         it.URI,
+				Name:        it.Name,
+				Description: it.Description,
+				MimeType:    it.MimeType,
+			})
+		}
+	}
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
@@ -558,6 +615,28 @@ func (s *Server) handleResourcesRead(req *Request) *Response {
 					}},
 				},
 			}
+		}
+	}
+
+	if s.pins != nil && s.pins.Has(params.URI) {
+		item, err := s.pins.Read(params.URI)
+		if err != nil {
+			return &Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &RPCError{Code: -32603, Message: err.Error()},
+			}
+		}
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: resourceReadResult{
+				Contents: []resourceContent{{
+					URI:      item.URI,
+					MimeType: item.MimeType,
+					Text:     item.Body,
+				}},
+			},
 		}
 	}
 
@@ -660,6 +739,104 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}},
+	}
+}
+
+func (s *Server) handlePin(req *Request, source, id, note string) *Response {
+	if id == "" {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: "Error: 'id' argument is required"}},
+				IsError: true,
+			},
+		}
+	}
+	if s.pins == nil {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: "Error: pin registry not configured"}},
+				IsError: true,
+			},
+		}
+	}
+	w, ok := s.pins.WriterFor(source)
+	if !ok {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error: source %q does not support pin writes", source)}},
+				IsError: true,
+			},
+		}
+	}
+	if err := w.Pin(id, note); err != nil {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error: %v", err)}},
+				IsError: true,
+			},
+		}
+	}
+	return &Response{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Pinned %s", id)}}},
+	}
+}
+
+func (s *Server) handleUnpin(req *Request, source, id string) *Response {
+	if id == "" {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: "Error: 'id' argument is required"}},
+				IsError: true,
+			},
+		}
+	}
+	if s.pins == nil {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: "Error: pin registry not configured"}},
+				IsError: true,
+			},
+		}
+	}
+	w, ok := s.pins.WriterFor(source)
+	if !ok {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error: source %q does not support pin writes", source)}},
+				IsError: true,
+			},
+		}
+	}
+	if err := w.Unpin(id); err != nil {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: ToolCallResult{
+				Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Error: %v", err)}},
+				IsError: true,
+			},
+		}
+	}
+	return &Response{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("Unpinned %s", id)}}},
 	}
 }
 

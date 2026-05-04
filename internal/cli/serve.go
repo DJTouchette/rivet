@@ -9,6 +9,8 @@ import (
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
 	"github.com/djtouchette/rivet/internal/mcp"
+	"github.com/djtouchette/rivet/internal/pins"
+	"github.com/djtouchette/rivet/internal/rally"
 	"github.com/djtouchette/rivet/internal/recon"
 	"github.com/djtouchette/rivet/internal/schema"
 	"github.com/djtouchette/rivet/internal/vaulty"
@@ -55,8 +57,11 @@ Configure Claude Code to use this server by adding to your MCP settings:
 				contexts = nil
 			}
 
+			pinReg := pins.NewRegistry()
+			pinReg.Add(rally.NewPinProvider())
+
 			policies := buildPolicies(cfg)
-			srv := mcp.NewServer(reg, exec, contexts, policies, version, cfg.Context.ShouldAutoCompact())
+			srv := mcp.NewServer(reg, exec, contexts, pinReg, policies, version, cfg.Context.ShouldAutoCompact())
 
 			if debug {
 				srv.SetLogger(log.New(os.Stderr, "[rivet-mcp] ", log.LstdFlags))

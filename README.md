@@ -28,6 +28,7 @@ go install github.com/djtouchette/rivet/cmd/rivet@latest
 go install github.com/djtouchette/recon/cmd/recon@latest
 go install github.com/djtouchette/witness/cmd/witness@latest
 go install github.com/djtouchette/vaulty/cmd/vaulty@latest
+go install github.com/djtouchette/rally/cmd/rally@latest
 
 # Initialize in your project
 cd your-project
@@ -218,6 +219,25 @@ Secrets proxy for AI agents. The agent gets capabilities, not credentials.
 - Full audit trail of every request
 
 Claude calls `vaulty.proxy` or `vaulty.exec` and never sees a raw secret.
+
+## Rally: Ticket Sync
+
+Your assigned tickets, synced into local markdown so Claude works from a real backlog instead of guessing what to do next.
+
+- Pulls assigned work items from Jira (Linear support in progress) into `.rally/tickets/*.md`
+- Normalizes provider-specific statuses and priorities into one vocabulary
+- Pin tickets to surface them as working context for the agent
+- `start`/`done` push status back to the source system
+- Tokens are brokered through Vaulty — never written to disk
+
+```bash
+rally connect jira            Authorize a provider (tokens go into Vaulty)
+rally sync                    Pull assigned tickets to .rally/tickets/
+rally next                    Highest-priority actionable ticket
+rally start <id>              Mark in-progress, pin it, push status upstream
+rally done <id>               Mark done and unpin
+rally pinned                  List pinned tickets (working context)
+```
 
 ## Safety Levels
 

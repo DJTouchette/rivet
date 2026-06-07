@@ -224,7 +224,7 @@ Claude calls `vaulty.proxy` or `vaulty.exec` and never sees a raw secret.
 
 Your assigned tickets, synced into local markdown so Claude works from a real backlog instead of guessing what to do next.
 
-- Pulls assigned work items from Jira and Linear into `.rally/tickets/*.md`
+- Pulls assigned work items from Jira, Linear, GitHub, and Asana into `.rally/tickets/*.md`
 - Normalizes provider-specific statuses and priorities into one vocabulary
 - Pin tickets to surface them as working context for the agent
 - `start`/`done` push status back to the source system

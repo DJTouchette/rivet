@@ -684,8 +684,8 @@ func TestLearnNudgeShownAtThreshold(t *testing.T) {
 	if !strings.Contains(result.Content[0].Text, "[rivet]") {
 		t.Error("nudge should appear at threshold")
 	}
-	if !strings.Contains(result.Content[0].Text, "rivet-learner") {
-		t.Error("nudge should mention rivet-learner agent")
+	if !strings.Contains(result.Content[0].Text, "rivet.learn") {
+		t.Error("nudge should tell the agent to call rivet.learn")
 	}
 }
 

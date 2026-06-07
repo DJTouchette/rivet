@@ -47,6 +47,16 @@ func Builtins() []Capability {
 			ArgsHint:    "A search query OR \"file:path\" to list symbols in a specific file. Examples: [\"send_sms\"], [\"file:lib/my_app/accounts.ex\"]",
 		},
 		{
+			Name:        "recon.callers",
+			Kind:        KindTool,
+			Description: "Find where a symbol is defined and every call site that references it. Args: [\"SymbolName\"]",
+			Command:     []string{"recon", "callers"},
+			Output:      "json",
+			Safety:      SafetyLevelSafe,
+			Builtin:     true,
+			ArgsHint:    "A symbol (function/method/type) name to find callers of. Example: [\"NewServer\"]",
+		},
+		{
 			Name:        "recon.changes",
 			Kind:        KindTool,
 			Description: "Recent git change summary — commits, affected files, areas. Args: [\"--since\", \"30d\"] for custom range (default: 7d)",

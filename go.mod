@@ -3,7 +3,7 @@ module github.com/djtouchette/rivet
 go 1.25.7
 
 require (
-	github.com/djtouchette/recon v0.7.0
+	github.com/djtouchette/recon v0.8.0
 	github.com/djtouchette/vaulty v0.4.0
 	github.com/djtouchette/witness v0.2.0
 	github.com/jackc/pgx/v5 v5.9.1
@@ -27,11 +27,30 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-pointer v0.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-kotlin v1.1.0 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-lua v0.5.0 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-zig v1.1.2 // indirect
+	github.com/tree-sitter/go-tree-sitter v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-bash v0.25.1 // indirect
+	github.com/tree-sitter/tree-sitter-c v0.24.2 // indirect
+	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5 // indirect
+	github.com/tree-sitter/tree-sitter-cpp v0.23.4 // indirect
+	github.com/tree-sitter/tree-sitter-go v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-java v0.23.5 // indirect
+	github.com/tree-sitter/tree-sitter-javascript v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-julia v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-php v0.24.2 // indirect
+	github.com/tree-sitter/tree-sitter-python v0.25.0 // indirect
+	github.com/tree-sitter/tree-sitter-ruby v0.23.1 // indirect
+	github.com/tree-sitter/tree-sitter-rust v0.24.2 // indirect
+	github.com/tree-sitter/tree-sitter-scala v0.26.0 // indirect
+	github.com/tree-sitter/tree-sitter-typescript v0.23.2 // indirect
 	github.com/zalando/go-keyring v0.2.8 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect

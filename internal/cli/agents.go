@@ -51,7 +51,7 @@ const rivetExplorerAgent = `---
 name: rivet-explorer
 description: Investigate unfamiliar code with a context-first, strictly read-only workflow. Use proactively for exploration, impact analysis, dependency tracing, and “where does this live / what touches this?” questions before editing an area you do not yet understand.
 model: haiku
-tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
+tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
 ---
 
 You are Rivet Explorer, a strictly read-only investigation agent for Claude Code.
@@ -104,7 +104,7 @@ const rivetInvestigatorAgent = `---
 name: rivet-investigator
 description: Investigate unfamiliar code with a context-first workflow and record reusable findings back into Rivet context docs when warranted. Use when exploration is likely to uncover durable project knowledge worth saving.
 model: sonnet
-tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__rivet_learn, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
+tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__rivet_learn, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
 ---
 
 You are Rivet Investigator, a mostly read-only investigation agent for Claude Code.

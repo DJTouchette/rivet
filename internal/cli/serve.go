@@ -58,11 +58,24 @@ Configure Claude Code to use this server by adding to your MCP settings:
 				contexts = nil
 			}
 
+			wiki, err := rivetctx.LoadWiki(".", cfg.Context.WikiPaths)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading wiki: %v\n", err)
+				wiki = nil
+			}
+			runbooks, err := rivetctx.LoadRunbooks(".")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading runbooks: %v\n", err)
+				runbooks = nil
+			}
+
 			pinReg := pins.NewRegistry()
 			pinReg.Add(rally.NewPinProvider())
 
 			policies := buildPolicies(cfg)
 			srv := mcp.NewServer(reg, exec, contexts, pinReg, policies, version, cfg.Context.ShouldAutoCompact())
+			srv.SetWiki(wiki)
+			srv.SetRunbooks(runbooks)
 
 			// Optional embedding-based recommend signal. Disabled unless
 			// RIVET_EMBED_BACKEND is set; failures degrade to lexical-only.

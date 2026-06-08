@@ -13,10 +13,10 @@ import (
 )
 
 type fakePinProvider struct {
-	src     string
-	items   []pins.Item
-	pinned  map[string]string // id -> note
-	pinErr  error
+	src    string
+	items  []pins.Item
+	pinned map[string]string // id -> note
+	pinErr error
 }
 
 func newFakePinProvider(src string) *fakePinProvider {
@@ -170,48 +170,53 @@ func TestToolsList(t *testing.T) {
 	var result toolsListResult
 	unmarshalResult(t, resp, &result)
 
-	// 4 rivet tools + 2 rally pin tools + 2 registry capabilities = 8
-	if len(result.Tools) != 8 {
-		t.Fatalf("expected 8 tools, got %d", len(result.Tools))
+	// 6 rivet tools (context-list/show/recommend, runbook, learn, runbook-draft)
+	// + 2 rally pin tools + 2 registry capabilities = 10
+	if len(result.Tools) != 10 {
+		t.Fatalf("expected 10 tools, got %d", len(result.Tools))
 	}
 
-	// Built-in rivet tools come first
-	if result.Tools[0].Name != "rivet.context-list" {
-		t.Errorf("expected first tool 'rivet.context-list', got %q", result.Tools[0].Name)
+	byName := map[string]Tool{}
+	var names []string
+	for _, tl := range result.Tools {
+		byName[tl.Name] = tl
+		names = append(names, tl.Name)
 	}
-	if result.Tools[1].Name != "rivet.context-show" {
-		t.Errorf("expected second tool 'rivet.context-show', got %q", result.Tools[1].Name)
+
+	// Built-in rivet tools come first, in declaration order.
+	wantOrder := []string{
+		"rivet.context-list", "rivet.context-show", "rivet.context-recommend",
+		"rivet.runbook", "rivet.learn", "rivet.runbook-draft",
+		"rally.pin", "rally.unpin",
+		// Registry capabilities follow (sorted by name).
+		"danger-cmd", "echo-test",
 	}
-	// context-show should have a name property
-	if _, ok := result.Tools[1].InputSchema.Properties["name"]; !ok {
+	for i, want := range wantOrder {
+		if result.Tools[i].Name != want {
+			t.Errorf("tool[%d] = %q, want %q (order: %v)", i, result.Tools[i].Name, want, names)
+		}
+	}
+
+	// context-show should have a name property.
+	if _, ok := byName["rivet.context-show"].InputSchema.Properties["name"]; !ok {
 		t.Error("rivet.context-show should have 'name' property in schema")
 	}
-	if result.Tools[3].Name != "rivet.learn" {
-		t.Errorf("expected fourth tool 'rivet.learn', got %q", result.Tools[3].Name)
+	// runbook tools should be present.
+	if _, ok := byName["rivet.runbook"]; !ok {
+		t.Error("rivet.runbook tool missing")
 	}
-	if result.Tools[4].Name != "rally.pin" {
-		t.Errorf("expected fifth tool 'rally.pin', got %q", result.Tools[4].Name)
-	}
-	if result.Tools[5].Name != "rally.unpin" {
-		t.Errorf("expected sixth tool 'rally.unpin', got %q", result.Tools[5].Name)
-	}
-
-	// Registry capabilities follow (sorted by name)
-	if result.Tools[6].Name != "danger-cmd" {
-		t.Errorf("expected seventh tool 'danger-cmd', got %q", result.Tools[6].Name)
-	}
-	if result.Tools[7].Name != "echo-test" {
-		t.Errorf("expected eighth tool 'echo-test', got %q", result.Tools[7].Name)
+	if _, ok := byName["rivet.runbook-draft"].InputSchema.Properties["triggers"]; !ok {
+		t.Error("rivet.runbook-draft should have 'triggers' property in schema")
 	}
 
 	// Dangerous tool should have approve property
-	dangerTool := result.Tools[6]
+	dangerTool := byName["danger-cmd"]
 	if _, ok := dangerTool.InputSchema.Properties["approve"]; !ok {
 		t.Error("dangerous tool should have 'approve' property in schema")
 	}
 
 	// Safe tool should NOT have approve property
-	safeTool := result.Tools[7]
+	safeTool := byName["echo-test"]
 	if _, ok := safeTool.InputSchema.Properties["approve"]; ok {
 		t.Error("safe tool should not have 'approve' property in schema")
 	}
@@ -549,12 +554,12 @@ func TestResourcesReadInvalidParams(t *testing.T) {
 func TestToolsCallBlockedByPolicy(t *testing.T) {
 	reg := capabilities.NewRegistry()
 	reg.Register(capabilities.Capability{
-		Name:    "gated-cmd",
-		Kind:    capabilities.KindProjectCommand,
+		Name:        "gated-cmd",
+		Kind:        capabilities.KindProjectCommand,
 		Description: "A gated command",
-		Command: []string{"echo", "gated"},
-		Output:  "text",
-		Safety:  capabilities.SafetyLevelDangerous,
+		Command:     []string{"echo", "gated"},
+		Output:      "text",
+		Safety:      capabilities.SafetyLevelDangerous,
 	})
 
 	exec := capabilities.NewExecutor(reg)
@@ -588,28 +593,28 @@ func newServerWithRecon(t *testing.T) *Server {
 	t.Helper()
 	reg := capabilities.NewRegistry()
 	reg.Register(capabilities.Capability{
-		Name:    "recon.search",
-		Kind:    capabilities.KindTool,
+		Name:        "recon.search",
+		Kind:        capabilities.KindTool,
 		Description: "Search",
-		Command: []string{"echo", "search results"},
-		Output:  "json",
-		Safety:  capabilities.SafetyLevelSafe,
+		Command:     []string{"echo", "search results"},
+		Output:      "json",
+		Safety:      capabilities.SafetyLevelSafe,
 	})
 	reg.Register(capabilities.Capability{
-		Name:    "recon.grep",
-		Kind:    capabilities.KindTool,
+		Name:        "recon.grep",
+		Kind:        capabilities.KindTool,
 		Description: "Grep",
-		Command: []string{"echo", "grep results"},
-		Output:  "json",
-		Safety:  capabilities.SafetyLevelSafe,
+		Command:     []string{"echo", "grep results"},
+		Output:      "json",
+		Safety:      capabilities.SafetyLevelSafe,
 	})
 	reg.Register(capabilities.Capability{
-		Name:    "recon.related",
-		Kind:    capabilities.KindTool,
+		Name:        "recon.related",
+		Kind:        capabilities.KindTool,
 		Description: "Related",
-		Command: []string{"echo", "related results"},
-		Output:  "json",
-		Safety:  capabilities.SafetyLevelSafe,
+		Command:     []string{"echo", "related results"},
+		Output:      "json",
+		Safety:      capabilities.SafetyLevelSafe,
 	})
 	exec := capabilities.NewExecutor(reg)
 	s := NewServer(reg, exec, nil, nil, nil, "test", true)

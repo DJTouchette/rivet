@@ -184,12 +184,14 @@ type Server struct {
 	registry     *capabilities.Registry
 	executor     *capabilities.Executor
 	contexts     []*rivetctx.Document
+	wiki         []*rivetctx.Document // free-form reference docs (KindWiki)
+	runbooks     []*rivetctx.Document // actionable procedures (KindRunbook)
 	pins         *pins.Registry
 	policies     []policy.Rule
 	version      string
 	logger       *log.Logger
-	autoCompact  bool   // whether to nudge promotion when the log gets long
-	learningsDir string // where rivet.learn writes entries
+	autoCompact  bool              // whether to nudge promotion when the log gets long
+	learningsDir string            // where rivet.learn writes entries
 	semantic     rivetctx.Semantic // optional embedding-based recommend signal; nil = lexical-only
 
 	// Session state for nudging.
@@ -224,6 +226,18 @@ func (s *Server) SetLearningsDir(dir string) {
 // scorer (the default) keeps rivet.context-recommend purely lexical.
 func (s *Server) SetSemantic(sem rivetctx.Semantic) {
 	s.semantic = sem
+}
+
+// SetWiki attaches free-form reference docs (KindWiki). They're exposed as
+// resources and included — down-weighted — in context-recommend.
+func (s *Server) SetWiki(docs []*rivetctx.Document) {
+	s.wiki = docs
+}
+
+// SetRunbooks attaches actionable procedures (KindRunbook), surfaced through
+// the rivet.runbook tool and as resources.
+func (s *Server) SetRunbooks(docs []*rivetctx.Document) {
+	s.runbooks = docs
 }
 
 // SetLogger sets a logger for debug output (written to stderr, never stdout).
@@ -379,6 +393,19 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		Tool{
+			Name:        "rivet.runbook",
+			Description: "[safe] Find the operational runbook for a symptom or situation (e.g. 'payments are failing', 'deploy rollback'). Returns the matching procedure — steps, verification, rollback — to follow. Call with no query to list all available runbooks. Runbooks are guidance: run any commands in them through your normal, overseen tools.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "A symptom, alert, or situation (e.g. 'webhook queue backing up', 'rotate db credentials'). Omit to list all runbooks.",
+					},
+				},
+			},
+		},
+		Tool{
 			Name:        "rivet.learn",
 			Description: "[guarded] Record a non-obvious finding to the learning log at .rivet/learnings/. One file per entry (parallel-safe). Entries are later promoted into context docs via /rivet-promote-learnings.",
 			InputSchema: inputSchema{
@@ -419,6 +446,45 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					},
 				},
 				Required: []string{"title", "observation"},
+			},
+		},
+		Tool{
+			Name:        "rivet.runbook-draft",
+			Description: "[guarded] Draft an operational runbook after working through a novel problem. Writes to .rivet/runbooks/drafts/ for HUMAN review — drafts are NOT retrievable via rivet.runbook until a person promotes them. Use 'triggers' (the symptoms that should surface this runbook) and write concrete, verified steps.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"title": map[string]interface{}{
+						"type":        "string",
+						"description": "Short, specific title. Example: 'Payment webhook backlog recovery'",
+					},
+					"triggers": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Symptoms/alerts that should surface this runbook (e.g. 'payments failing', 'webhook queue backlog').",
+					},
+					"steps": map[string]interface{}{
+						"type":        "string",
+						"description": "The ordered procedure (markdown). Each step: the action and its expected result.",
+					},
+					"verification": map[string]interface{}{
+						"type":        "string",
+						"description": "How to confirm the procedure worked (optional).",
+					},
+					"rollback": map[string]interface{}{
+						"type":        "string",
+						"description": "How to undo it if needed (optional).",
+					},
+					"severity": map[string]interface{}{
+						"type":        "string",
+						"description": "low | medium | high | critical (optional).",
+					},
+					"owner": map[string]interface{}{
+						"type":        "string",
+						"description": "Team responsible (optional).",
+					},
+				},
+				Required: []string{"title", "steps"},
 			},
 		},
 		Tool{
@@ -494,6 +560,11 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "rivet.context-recommend":
 		query, _ := params.Arguments["query"].(string)
 		return s.handleContextRecommend(req, query)
+	case "rivet.runbook":
+		query, _ := params.Arguments["query"].(string)
+		return s.handleRunbook(req, query)
+	case "rivet.runbook-draft":
+		return s.handleRunbookDraft(req, params.Arguments)
 	case "rivet.learn":
 		s.reconCallsSinceLearn = 0
 		return s.handleLearn(req, params.Arguments)
@@ -568,13 +639,23 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	}
 }
 
+// allDocs returns every retrievable document across tiers (context + wiki +
+// runbooks) for resource listing/reading.
+func (s *Server) allDocs() []*rivetctx.Document {
+	all := make([]*rivetctx.Document, 0, len(s.contexts)+len(s.wiki)+len(s.runbooks))
+	all = append(all, s.contexts...)
+	all = append(all, s.wiki...)
+	all = append(all, s.runbooks...)
+	return all
+}
+
 func (s *Server) handleResourcesList(req *Request) *Response {
-	resources := make([]Resource, 0, len(s.contexts))
-	for _, doc := range s.contexts {
+	resources := make([]Resource, 0, len(s.contexts)+len(s.wiki)+len(s.runbooks))
+	for _, doc := range s.allDocs() {
 		resources = append(resources, Resource{
 			URI:         doc.URI(),
 			Name:        doc.Title,
-			Description: fmt.Sprintf("%s context: %s", doc.Kind, doc.Name),
+			Description: fmt.Sprintf("%s: %s", doc.Kind, doc.Name),
 			MimeType:    "text/markdown",
 		})
 	}
@@ -609,7 +690,7 @@ func (s *Server) handleResourcesRead(req *Request) *Response {
 		}
 	}
 
-	for _, doc := range s.contexts {
+	for _, doc := range s.allDocs() {
 		if doc.URI() == params.URI {
 			return &Response{
 				JSONRPC: "2.0",
@@ -728,13 +809,16 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 	if s.semantic != nil {
 		opts = append(opts, rivetctx.WithSemantic(s.semantic))
 	}
-	recs := rivetctx.Recommend(s.contexts, query, 5, opts...)
+	// Include wiki reference docs (down-weighted by kind) alongside curated
+	// context docs; runbooks have their own rivet.runbook tool.
+	pool := append(append([]*rivetctx.Document{}, s.contexts...), s.wiki...)
+	recs := rivetctx.Recommend(pool, query, 5, opts...)
 
 	if len(recs) == 0 {
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
-			Result: ToolCallResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("No context documents match %q", query)}}},
+			Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("No context documents match %q", query)}}},
 		}
 	}
 
@@ -750,6 +834,107 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}},
+	}
+}
+
+// handleRunbook implements the rivet.runbook tool. With a query it finds the
+// runbook(s) whose triggers/content best match the symptom and returns the
+// top match's full procedure (plus alternatives). With no query it lists the
+// available runbooks so the agent can see what's covered.
+func (s *Server) handleRunbook(req *Request, query string) *Response {
+	text := func(body string) *Response {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: body}}},
+		}
+	}
+
+	if len(s.runbooks) == 0 {
+		return text("No runbooks found. Add markdown procedures to .rivet/runbooks/ (with `triggers:` frontmatter so they can be found by symptom).")
+	}
+
+	// No query → list what's available.
+	if strings.TrimSpace(query) == "" {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Available runbooks (%d):\n\n", len(s.runbooks)))
+		for _, rb := range s.runbooks {
+			sb.WriteString(fmt.Sprintf("  %s — %s\n", rb.Name, rb.Title))
+			if len(rb.Triggers) > 0 {
+				sb.WriteString(fmt.Sprintf("        triggers: %s\n", strings.Join(rb.Triggers, "; ")))
+			}
+			sb.WriteString(fmt.Sprintf("        uri: %s\n", rb.URI()))
+		}
+		sb.WriteString("\nCall rivet.runbook with a symptom (e.g. \"payments failing\") to get the matching procedure.")
+		return text(sb.String())
+	}
+
+	var opts []rivetctx.Option
+	if s.semantic != nil {
+		opts = append(opts, rivetctx.WithSemantic(s.semantic))
+	}
+	matches := rivetctx.RecommendRunbooks(s.runbooks, query, 5, opts...)
+	if len(matches) == 0 {
+		return text(fmt.Sprintf("No runbook matches %q. Use rivet.runbook with no query to list all runbooks.", query))
+	}
+
+	var sb strings.Builder
+	best := matches[0]
+	sb.WriteString(fmt.Sprintf("Runbook for %q: %s (score %.2f)\n", query, best.Title, best.Score))
+	if best.Severity != "" {
+		sb.WriteString(fmt.Sprintf("severity: %s\n", best.Severity))
+	}
+	if len(best.Triggers) > 0 {
+		sb.WriteString(fmt.Sprintf("triggers: %s\n", strings.Join(best.Triggers, "; ")))
+	}
+	sb.WriteString(fmt.Sprintf("uri: %s\n\n", best.URI))
+	sb.WriteString(best.Document.Body)
+
+	if len(matches) > 1 {
+		sb.WriteString("\n\n---\nOther possibly-relevant runbooks:\n")
+		for _, m := range matches[1:] {
+			sb.WriteString(fmt.Sprintf("  %.2f  %s — %s\n", m.Score, m.Name, m.Title))
+		}
+	}
+	return text(sb.String())
+}
+
+// handleRunbookDraft implements rivet.runbook-draft: the agent drafts a runbook
+// into .rivet/runbooks/drafts/ for human promotion. The draft is deliberately
+// not retrievable until a person reviews and promotes it.
+func (s *Server) handleRunbookDraft(req *Request, args map[string]interface{}) *Response {
+	errResp := func(msg string) *Response {
+		return &Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: "Error: " + msg}}, IsError: true},
+		}
+	}
+
+	title, _ := args["title"].(string)
+	steps, _ := args["steps"].(string)
+	if strings.TrimSpace(title) == "" || strings.TrimSpace(steps) == "" {
+		return errResp("'title' and 'steps' are required")
+	}
+
+	path, err := rivetctx.CreateRunbookDraft(rivetctx.RunbooksDir, rivetctx.NewRunbook{
+		Title:        title,
+		Triggers:     stringSliceArg(args, "triggers"),
+		Severity:     stringArg(args, "severity"),
+		Owner:        stringArg(args, "owner"),
+		Steps:        steps,
+		Verification: stringArg(args, "verification"),
+		Rollback:     stringArg(args, "rollback"),
+	})
+	if err != nil {
+		return errResp(err.Error())
+	}
+
+	msg := fmt.Sprintf("Drafted runbook at %s.\n\nThis is a DRAFT — it won't be found via rivet.runbook until a human reviews and promotes it with `rivet runbook promote`. Tell the user a draft is ready for review.", path)
+	return &Response{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: msg}}},
 	}
 }
 

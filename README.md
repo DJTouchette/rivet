@@ -109,6 +109,41 @@ rivet context recommend "customer refund dispute"
 
 `rivet context index` writes a deterministic, **git-committable** cache (`.rivet/embeddings/manifest.json` + `vectors.bin`) — commit it so retrieval works offline without re-embedding. Re-running only embeds new or changed content; switching models invalidates the cache automatically. Long docs (a wiki) are chunked into overlapping passages, and a doc scores by its best-matching chunk. At query time only the query is embedded (one tiny call); matched docs gain a `semantic-match` signal in the output. If the embedder is unavailable, recommendation silently stays lexical.
 
+### Wiki & Runbooks
+
+Context docs are the *curated, code-adjacent* tier — "what must I know to change this code safely?" Two more tiers cover the rest of what devs and agents need, and both feed the same retrieval engine (and semantic index):
+
+**Wiki** (`.rivet/wiki/`) — free-form reference and narrative: onboarding, architecture, the "why" behind decisions. Point rivet at docs you already have instead of re-authoring them — set `wiki_paths` in `.rivet/config.yaml` to a `docs/**` tree or a checked-out Azure DevOps wiki (which is just a git repo of markdown):
+
+```yaml
+context:
+  wiki_paths:
+    - "../project.wiki/**"   # your team pulls the latest; rivet just reads it
+    - "docs/**"
+```
+
+Wiki docs show up in `rivet.context-recommend`, ranked *below* curated context so they augment rather than outrank it.
+
+**Runbooks** (`.rivet/runbooks/`) — actionable, trigger-keyed procedures: "what do I DO when X happens?" They have their own tool because they're reached deliberately, by symptom:
+
+```bash
+rivet runbook find payments are failing      # → the matching procedure, by trigger
+rivet runbook list                            # what's covered
+```
+
+```markdown
+---
+title: Payment webhook backlog recovery
+triggers: [payments failing, webhook queue backlog]   # ← how it's found
+severity: high
+owner: payments-team
+last_tested: 2026-05-01                                # runbooks rot dangerously
+---
+## Steps  ## Verification  ## Rollback  ## Escalation
+```
+
+Agents get a matching `rivet.runbook` tool (find-by-symptom / list) — runbooks are **guidance**, so any commands in them run through the agent's normal, overseen tools, never auto-executed. An agent that works through a novel operational problem can draft a runbook (`rivet.runbook-draft` → `.rivet/runbooks/drafts/`), but a draft is **never retrievable until a human reviews and promotes it** (`rivet runbook promote`) — a wrong runbook followed under pressure is worse than none. `rivet context lint` flags runbooks missing `triggers`/`owner` or with a stale/absent `last_tested`.
+
 ### The Feedback Loop
 
 This is where it gets interesting.
@@ -323,6 +358,10 @@ rivet context show <name>     Read one
 rivet context scaffold        Generate starter docs from recon analysis
 rivet context recommend <q>   "What context is relevant to this task?"
 rivet context index           Precompute embeddings for semantic recommend (optional)
+rivet runbook find <symptom>  Find the operational runbook for a symptom
+rivet runbook list            List runbooks and their triggers
+rivet runbook draft <title>   Draft a runbook for human review (--steps, --trigger)
+rivet runbook promote <name>  Promote a reviewed draft into an active runbook
 rivet context lint            Check docs for quality and staleness
 rivet policy status           Show active policies
 rivet schema overview         Configured databases + migration summary

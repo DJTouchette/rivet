@@ -6,10 +6,21 @@ import (
 	"os"
 	"strings"
 
+	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
 	"github.com/djtouchette/rivet/internal/context/semantic"
 	"github.com/spf13/cobra"
 )
+
+// wikiPathsFromConfig returns the configured extra wiki roots, or nil if config
+// is absent/unreadable (wiki then loads only the native .rivet/wiki/ tree).
+func wikiPathsFromConfig() []string {
+	cfg, err := config.LoadOrDefault("")
+	if err != nil {
+		return nil
+	}
+	return cfg.Context.WikiPaths
+}
 
 func newContextCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -67,8 +78,19 @@ Configure the embedder with environment variables:
 			if err != nil {
 				return err
 			}
+			// Index wiki + runbooks alongside context docs — the wiki is the
+			// corpus that most benefits from semantic retrieval.
+			wiki, err := rivetctx.LoadWiki(".", wikiPathsFromConfig())
+			if err != nil {
+				return err
+			}
+			runbooks, err := rivetctx.LoadRunbooks(".")
+			if err != nil {
+				return err
+			}
+			docs = append(append(docs, wiki...), runbooks...)
 			if len(docs) == 0 {
-				fmt.Println("No context documents to index.")
+				fmt.Println("No context, wiki, or runbook documents to index.")
 				return nil
 			}
 
@@ -177,6 +199,11 @@ To add tags and related_paths, use frontmatter in context documents:
 				return nil
 			}
 
+			// Include wiki reference docs (down-weighted by kind) in recommend.
+			if wiki, err := rivetctx.LoadWiki(".", wikiPathsFromConfig()); err == nil {
+				docs = append(docs, wiki...)
+			}
+
 			query := strings.Join(args, " ")
 
 			// Optional semantic signal (env-configured); lexical-only otherwise.
@@ -253,8 +280,16 @@ func newContextLintCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Lint native wiki + runbooks too (not external wiki_paths — we
+			// don't own those). Runbooks get their own kind-specific rules.
+			if wiki, err := rivetctx.LoadWiki(".", nil); err == nil {
+				docs = append(docs, wiki...)
+			}
+			if runbooks, err := rivetctx.LoadRunbooks("."); err == nil {
+				docs = append(docs, runbooks...)
+			}
 			if len(docs) == 0 {
-				fmt.Println("No context documents found.")
+				fmt.Println("No context, wiki, or runbook documents found.")
 				return nil
 			}
 

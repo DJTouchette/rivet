@@ -16,12 +16,21 @@ const (
 	KindDomain   Kind = "domain"
 	KindModule   Kind = "module"
 	KindParadigm Kind = "paradigm"
+	KindWiki     Kind = "wiki"    // free-form reference / narrative docs
+	KindRunbook  Kind = "runbook" // actionable, trigger-keyed procedures
 )
 
-// Document is a loaded context document from .rivet/context/.
+// IsContextKind reports whether a kind is one of the curated, code-adjacent
+// context kinds (as opposed to wiki/runbook reference tiers).
+func (k Kind) IsContextKind() bool {
+	return k == KindDomain || k == KindModule || k == KindParadigm
+}
+
+// Document is a loaded context document from .rivet/context/, .rivet/wiki/, or
+// .rivet/runbooks/.
 type Document struct {
-	Name         string    // filename without extension (e.g. "billing")
-	Kind         Kind      // domain, module, or paradigm
+	Name         string    // filename without extension, or slash-rel path for nested wiki/runbooks
+	Kind         Kind      // domain, module, paradigm, wiki, or runbook
 	Title        string    // first # heading, or Name if none found
 	Tags         []string  // from frontmatter: tags
 	RelatedPaths []string  // from frontmatter: related_paths (glob patterns)
@@ -30,19 +39,37 @@ type Document struct {
 	Body         string    // markdown content (after frontmatter)
 	RawBody      string    // full file content including frontmatter
 	Path         string    // filesystem path
+
+	// Runbook-specific frontmatter (empty/zero for other kinds).
+	Triggers   []string  // symptoms/alerts that invoke this runbook (retrieval keys)
+	Severity   string    // low | medium | high | critical
+	LastTested time.Time // from frontmatter: last_tested (YYYY-MM-DD)
 }
 
-// URI returns the MCP resource URI for this document.
+// URI returns the MCP resource URI for this document. Wiki and runbook docs get
+// their own schemes; the curated context kinds keep their established URIs.
 func (d *Document) URI() string {
-	return fmt.Sprintf("rivet://context/%ss/%s", d.Kind, d.Name)
+	switch d.Kind {
+	case KindWiki:
+		return "rivet://wiki/" + d.Name
+	case KindRunbook:
+		return "rivet://runbook/" + d.Name
+	default:
+		return fmt.Sprintf("rivet://context/%ss/%s", d.Kind, d.Name)
+	}
 }
 
 // EmbeddingText is the text embedded for semantic matching: the title (it
-// carries the most signal per token) followed by the body. Tags are included so
-// a query that matches a tag conceptually — not just lexically — still lands.
+// carries the most signal per token) followed by the body. Tags and runbook
+// triggers are included so a query that matches them conceptually — not just
+// lexically — still lands (e.g. a symptom query finding a runbook by trigger).
 func (d *Document) EmbeddingText() string {
 	var b strings.Builder
 	b.WriteString(d.Title)
+	if len(d.Triggers) > 0 {
+		b.WriteString("\n")
+		b.WriteString(strings.Join(d.Triggers, " "))
+	}
 	if len(d.Tags) > 0 {
 		b.WriteString("\n")
 		b.WriteString(strings.Join(d.Tags, " "))
@@ -142,6 +169,9 @@ type frontmatter struct {
 	relatedPaths []string
 	owner        string
 	lastReviewed string
+	triggers     []string // runbook: symptoms/alerts
+	severity     string   // runbook: low|medium|high|critical
+	lastTested   string   // runbook: YYYY-MM-DD
 }
 
 // parseFrontmatter extracts YAML frontmatter from markdown content.
@@ -187,6 +217,8 @@ func parseFrontmatter(raw string) (frontmatter, string) {
 				fm.tags = append(fm.tags, val)
 			case "related_paths":
 				fm.relatedPaths = append(fm.relatedPaths, val)
+			case "triggers":
+				fm.triggers = append(fm.triggers, val)
 			}
 			continue
 		}
@@ -211,6 +243,8 @@ func parseFrontmatter(raw string) (frontmatter, string) {
 					fm.tags = append(fm.tags, item)
 				case "related_paths":
 					fm.relatedPaths = append(fm.relatedPaths, item)
+				case "triggers":
+					fm.triggers = append(fm.triggers, item)
 				}
 			}
 			continue
@@ -225,10 +259,16 @@ func parseFrontmatter(raw string) (frontmatter, string) {
 			fm.tags = append(fm.tags, valPart)
 		case "related_paths":
 			fm.relatedPaths = append(fm.relatedPaths, valPart)
+		case "triggers":
+			fm.triggers = append(fm.triggers, valPart)
 		case "owner":
 			fm.owner = valPart
 		case "last_reviewed":
 			fm.lastReviewed = valPart
+		case "severity":
+			fm.severity = valPart
+		case "last_tested":
+			fm.lastTested = valPart
 		}
 	}
 

@@ -323,18 +323,18 @@ func TestExtractBacktickPaths(t *testing.T) {
 		{"`lib/billing/invoice.ex` — handles invoices", 1},
 		{"`lib/a.ex` and `lib/b.ex` are related", 2},
 		{"no backticks here", 0},
-		{"`billing` is not a path", 0},                          // no slash
-		{"`mix ecto.migrate` is a command", 0},                  // has space
-		{"`https://example.com/api` is a URL", 0},               // URL
-		{"`lib/billing/invoice.ex` and `--flag` stuff", 1},      // flag filtered
-		{"`Billing.Invoice` is a module name, not a path", 0},   // no slash
-		{"`changeset/2` is arity notation", 0},                  // arity
-		{"`Module.func/1` is a module ref", 0},                  // uppercase
-		{"`/api/billing` is a route", 0},                        // starts with /
-		{"`text/xml` is a MIME type", 0},                        // no known prefix
-		{"`billing/invoice.ex` is not rooted", 0},               // no known prefix
-		{"`lib/billing/{context}.ex` has template braces", 0},   // braces
-		{"`:telemetry.execute/3` is an atom ref", 0},            // starts with :
+		{"`billing` is not a path", 0},                        // no slash
+		{"`mix ecto.migrate` is a command", 0},                // has space
+		{"`https://example.com/api` is a URL", 0},             // URL
+		{"`lib/billing/invoice.ex` and `--flag` stuff", 1},    // flag filtered
+		{"`Billing.Invoice` is a module name, not a path", 0}, // no slash
+		{"`changeset/2` is arity notation", 0},                // arity
+		{"`Module.func/1` is a module ref", 0},                // uppercase
+		{"`/api/billing` is a route", 0},                      // starts with /
+		{"`text/xml` is a MIME type", 0},                      // no known prefix
+		{"`billing/invoice.ex` is not rooted", 0},             // no known prefix
+		{"`lib/billing/{context}.ex` has template braces", 0}, // braces
+		{"`:telemetry.execute/3` is an atom ref", 0},          // starts with :
 	}
 
 	for _, tt := range tests {
@@ -355,23 +355,23 @@ func TestLooksLikeFilePath(t *testing.T) {
 		{"internal/pkg/bar.go", true},
 		{"test/billing_test.exs", true},
 		{"app/models/user.rb", true},
-		{"billing", false},                      // no slash
-		{"mix ecto.migrate", false},             // has space
-		{"--json", false},                       // flag
-		{"https://example.com", false},          // URL
-		{"fn()", false},                         // parens
-		{"a=b/c", false},                       // equals
-		{"", false},                             // empty
-		{"ab", false},                           // too short
-		{"changeset/2", false},                  // arity notation
-		{"handle_webhook/3", false},             // arity notation
-		{"Module.func/1", false},                // uppercase module
-		{"Billing.Invoice", false},              // uppercase, no slash
-		{"/api/billing", false},                 // route (starts with /)
-		{":telemetry.execute/3", false},         // atom ref
-		{"text/xml", false},                     // no known prefix
-		{"billing/invoice.ex", false},           // no known prefix
-		{"lib/billing/{context}.ex", false},     // braces
+		{"billing", false},                  // no slash
+		{"mix ecto.migrate", false},         // has space
+		{"--json", false},                   // flag
+		{"https://example.com", false},      // URL
+		{"fn()", false},                     // parens
+		{"a=b/c", false},                    // equals
+		{"", false},                         // empty
+		{"ab", false},                       // too short
+		{"changeset/2", false},              // arity notation
+		{"handle_webhook/3", false},         // arity notation
+		{"Module.func/1", false},            // uppercase module
+		{"Billing.Invoice", false},          // uppercase, no slash
+		{"/api/billing", false},             // route (starts with /)
+		{":telemetry.execute/3", false},     // atom ref
+		{"text/xml", false},                 // no known prefix
+		{"billing/invoice.ex", false},       // no known prefix
+		{"lib/billing/{context}.ex", false}, // braces
 	}
 
 	for _, tt := range tests {

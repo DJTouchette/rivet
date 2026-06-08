@@ -25,6 +25,13 @@ type ContextConfig struct {
 	// accumulate until someone explicitly runs /rivet-compact-context
 	// (e.g. after merging branches). Default: true.
 	AutoCompact *bool `yaml:"auto_compact,omitempty"`
+
+	// WikiPaths are extra roots (directories or globs like "docs/**" or
+	// "../project.wiki/**") indexed as wiki reference docs, in addition to the
+	// native .rivet/wiki/ tree. Useful for pointing rivet at a checked-out
+	// Azure DevOps wiki or an existing docs/ tree. The team is responsible for
+	// keeping those checkouts current; rivet only reads the markdown.
+	WikiPaths []string `yaml:"wiki_paths,omitempty"`
 }
 
 // ShouldAutoCompact returns whether auto-compaction nudges are enabled.
@@ -43,11 +50,11 @@ type ProjectCLIConfig struct {
 
 // PolicyDef is a policy rule as declared in config.yaml.
 type PolicyDef struct {
-	Name        string          `yaml:"name"`
-	Description string          `yaml:"description,omitempty"`
-	Match       PolicyMatchDef  `yaml:"match"`
-	RequireEnv  []string        `yaml:"require_env,omitempty"`
-	DenyEnv     []string        `yaml:"deny_env,omitempty"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description,omitempty"`
+	Match       PolicyMatchDef `yaml:"match"`
+	RequireEnv  []string       `yaml:"require_env,omitempty"`
+	DenyEnv     []string       `yaml:"deny_env,omitempty"`
 }
 
 // PolicyMatchDef describes which capabilities a policy rule applies to.
@@ -145,8 +152,15 @@ func StarterConfigYAML() []byte {
 #               false — let learnings accumulate and compact manually (e.g. after merges).
 #               Set to false for team workflows where branches add learnings independently
 #               and compaction happens on main after merge.
+# wiki_paths:   extra markdown roots indexed as wiki reference docs, in addition
+#               to .rivet/wiki/. Point at an existing docs/ tree or a checked-out
+#               Azure DevOps wiki (itself a git repo of markdown). Your team keeps
+#               those checkouts current; rivet only reads them.
 # context:
 #   auto_compact: false
+#   wiki_paths:
+#     - "../project.wiki/**"
+#     - "docs/**"
 
 # Project CLI — the repo-local CLI that exposes project-specific operations.
 # Uncomment and set the path to your project CLI binary.

@@ -116,6 +116,9 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 		}
 
 		if score > 0 {
+			// Down-weight reference tiers (wiki) so curated context docs lead
+			// for code-change queries; runbooks have their own dedicated tool.
+			score *= kindWeight(doc.Kind)
 			if score > 1.0 {
 				score = 1.0
 			}
@@ -143,6 +146,16 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 	}
 
 	return results
+}
+
+// kindWeight scales a doc's score by its retrieval tier. Curated context kinds
+// (domain/module/paradigm) score at full weight; wiki reference docs are
+// down-weighted so they augment rather than outrank code-adjacent context.
+func kindWeight(k Kind) float64 {
+	if k == KindWiki {
+		return 0.85
+	}
+	return 1.0
 }
 
 // tokenize splits a query into lowercase tokens, filtering noise words.
@@ -307,7 +320,7 @@ func scoreNameMatch(name, title string, tokens []string) (float64, string) {
 // emerging knowledge that hasn't been promoted yet.
 type LearningRecommendation struct {
 	Entry   *LearningEntry `json:"-"`
-	Name    string         `json:"name"`    // filename without .md
+	Name    string         `json:"name"` // filename without .md
 	Title   string         `json:"title"`
 	Date    string         `json:"date"`
 	Score   float64        `json:"score"`

@@ -48,6 +48,10 @@ func Lint(docs []*Document, projectRoot string) LintResult {
 	return result
 }
 
+// StaleTestDays is the number of days after which a runbook's last_tested is
+// flagged. Untested runbooks are dangerous to follow under pressure.
+const StaleTestDays = 180
+
 func lintDoc(doc *Document, projectRoot string) []LintWarning {
 	var warnings []LintWarning
 	add := func(sev Severity, rule, msg string) {
@@ -61,28 +65,44 @@ func lintDoc(doc *Document, projectRoot string) []LintWarning {
 		})
 	}
 
-	// Rule: missing-tags — no tags in frontmatter.
-	if len(doc.Tags) == 0 {
-		add(SeverityWarning, "missing-tags", "no tags in frontmatter — add tags for better recommendation matching")
+	switch doc.Kind {
+	case KindRunbook:
+		// Runbooks are found by symptom and followed under pressure, so the
+		// rules differ: triggers are essential, and untested is dangerous.
+		if len(doc.Triggers) == 0 {
+			add(SeverityWarning, "missing-triggers", "no triggers in frontmatter — add symptoms/alerts so this runbook can be found when it's needed")
+		}
+		if strings.TrimSpace(doc.Owner) == "" {
+			add(SeverityWarning, "missing-owner", "no owner in frontmatter — add the team responsible for this procedure")
+		}
+		if doc.LastTested.IsZero() {
+			add(SeverityWarning, "untested-runbook", "no last_tested date — a runbook that's never been verified is risky to follow")
+		} else if age := int(time.Since(doc.LastTested).Hours() / 24); age > StaleTestDays {
+			add(SeverityWarning, "stale-test",
+				fmt.Sprintf("last tested %d days ago (threshold: %d) — re-test and update last_tested", age, StaleTestDays))
+		}
+	case KindWiki:
+		// Wiki is free-form (often imported); only flag genuinely broken content.
+	default:
+		// Curated context kinds.
+		if len(doc.Tags) == 0 {
+			add(SeverityWarning, "missing-tags", "no tags in frontmatter — add tags for better recommendation matching")
+		}
+		if len(doc.RelatedPaths) == 0 {
+			add(SeverityWarning, "missing-related-paths", "no related_paths in frontmatter — add glob patterns to link this doc to source files")
+		}
+		if strings.TrimSpace(doc.Owner) == "" {
+			add(SeverityWarning, "missing-owner", "no owner in frontmatter — add an owner responsible for keeping this doc accurate")
+		}
+		if doc.LastReviewed.IsZero() {
+			add(SeverityWarning, "stale-review", "no last_reviewed date in frontmatter — add one so staleness can be tracked")
+		} else if age := int(time.Since(doc.LastReviewed).Hours() / 24); age > StaleReviewDays {
+			add(SeverityWarning, "stale-review",
+				fmt.Sprintf("last reviewed %d days ago (threshold: %d) — re-review and update last_reviewed", age, StaleReviewDays))
+		}
 	}
 
-	// Rule: missing-related-paths — no related_paths in frontmatter.
-	if len(doc.RelatedPaths) == 0 {
-		add(SeverityWarning, "missing-related-paths", "no related_paths in frontmatter — add glob patterns to link this doc to source files")
-	}
-
-	// Rule: missing-owner — no owner in frontmatter.
-	if strings.TrimSpace(doc.Owner) == "" {
-		add(SeverityWarning, "missing-owner", "no owner in frontmatter — add an owner responsible for keeping this doc accurate")
-	}
-
-	// Rule: stale-review — last_reviewed is older than StaleReviewDays, or missing.
-	if doc.LastReviewed.IsZero() {
-		add(SeverityWarning, "stale-review", "no last_reviewed date in frontmatter — add one so staleness can be tracked")
-	} else if age := int(time.Since(doc.LastReviewed).Hours() / 24); age > StaleReviewDays {
-		add(SeverityWarning, "stale-review",
-			fmt.Sprintf("last reviewed %d days ago (threshold: %d) — re-review and update last_reviewed", age, StaleReviewDays))
-	}
+	// Rules below apply to every kind.
 
 	// Rule: placeholder-section — unfilled HTML comment placeholders.
 	placeholders := countPlaceholders(doc.Body)

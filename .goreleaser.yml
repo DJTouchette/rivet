@@ -4,9 +4,10 @@ project_name: rivet
 
 builds:
   # rivet links tree-sitter (CGo) transitively via recon, so binaries must be
-  # built with CGO_ENABLED=1. We cross-compile every target from one Linux
-  # runner using `zig cc` as the C/C++ cross toolchain (zig bundles libc for
-  # linux/macos/windows). Linux targets pin glibc 2.17 for broad compatibility.
+  # built with CGO_ENABLED=1. The release runs on a macOS runner: darwin builds
+  # natively (zig can't cross-compile Go's CGo to macOS — no real SDK), while
+  # linux and windows are cross-compiled with `zig cc` (zig bundles their libc).
+  # Linux targets pin glibc 2.17 for broad compatibility.
   - main: ./cmd/rivet
     binary: rivet
     env:
@@ -31,16 +32,8 @@ builds:
         env:
           - CC=zig cc -target aarch64-linux-gnu.2.17
           - CXX=zig c++ -target aarch64-linux-gnu.2.17
-      - goos: darwin
-        goarch: amd64
-        env:
-          - CC=zig cc -target x86_64-macos
-          - CXX=zig c++ -target x86_64-macos
-      - goos: darwin
-        goarch: arm64
-        env:
-          - CC=zig cc -target aarch64-macos
-          - CXX=zig c++ -target aarch64-macos
+      # darwin/* intentionally have no override: native clang on the macOS
+      # runner builds both arches (universal toolchain).
       - goos: windows
         goarch: amd64
         env:

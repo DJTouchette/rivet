@@ -24,3 +24,6 @@ Thumbs.db
 .rivet/cache/
 .recon/
 next_steps.md
+
+# goreleaser build output
+dist/

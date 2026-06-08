@@ -20,6 +20,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # zig is the C/C++ cross-compiler for the CGO (tree-sitter) builds.
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"

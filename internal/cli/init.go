@@ -118,6 +118,8 @@ func ensureProjectSetup(force bool) ([]string, error) {
 		filepath.Join(rivetDir, "context", "domains"),
 		filepath.Join(rivetDir, "context", "modules"),
 		filepath.Join(rivetDir, "context", "paradigms"),
+		filepath.Join(rivetDir, "wiki"),
+		filepath.Join(rivetDir, "runbooks"),
 		filepath.Join(rivetDir, "capabilities"),
 	}
 	for _, d := range dirs {
@@ -160,6 +162,12 @@ func ensureProjectSetup(force bool) ([]string, error) {
 		return nil, fmt.Errorf("installing hooks: %w", err)
 	}
 	actions = append(actions, hookAction)
+
+	runbookActions, err := ensureRunbooks()
+	if err != nil {
+		return nil, fmt.Errorf("installing runbooks: %w", err)
+	}
+	actions = append(actions, runbookActions...)
 
 	return actions, nil
 }

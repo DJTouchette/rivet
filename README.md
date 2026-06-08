@@ -144,6 +144,8 @@ last_tested: 2026-05-01                                # runbooks rot dangerousl
 
 Agents get a matching `rivet.runbook` tool (find-by-symptom / list) — runbooks are **guidance**, so any commands in them run through the agent's normal, overseen tools, never auto-executed. An agent that works through a novel operational problem can draft a runbook (`rivet.runbook-draft` → `.rivet/runbooks/drafts/`), but a draft is **never retrievable until a human reviews and promotes it** (`rivet runbook promote`) — a wrong runbook followed under pressure is worse than none. `rivet context lint` flags runbooks missing `triggers`/`owner` or with a stale/absent `last_tested`.
 
+`rivet init` ships a couple of starter runbooks for operating rivet itself — including **Enable semantic search**, a step-by-step ONNX setup an agent can find (`rivet.runbook find "set up embeddings"`) and follow on a fresh, lexical-only install to turn on the embeddings above.
+
 ### The Feedback Loop
 
 This is where it gets interesting.

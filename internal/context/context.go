@@ -37,6 +37,23 @@ func (d *Document) URI() string {
 	return fmt.Sprintf("rivet://context/%ss/%s", d.Kind, d.Name)
 }
 
+// EmbeddingText is the text embedded for semantic matching: the title (it
+// carries the most signal per token) followed by the body. Tags are included so
+// a query that matches a tag conceptually — not just lexically — still lands.
+func (d *Document) EmbeddingText() string {
+	var b strings.Builder
+	b.WriteString(d.Title)
+	if len(d.Tags) > 0 {
+		b.WriteString("\n")
+		b.WriteString(strings.Join(d.Tags, " "))
+	}
+	if d.Body != "" {
+		b.WriteString("\n")
+		b.WriteString(d.Body)
+	}
+	return b.String()
+}
+
 // Load reads all context documents from the given base directory.
 // The base directory should contain domains/, modules/, and/or paradigms/ subdirectories.
 // Missing subdirectories are silently skipped.

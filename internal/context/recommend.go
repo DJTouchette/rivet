@@ -17,11 +17,42 @@ type Recommendation struct {
 	URI      string    `json:"uri"`
 }
 
+// Semantic is the optional embedding-based scorer. It is satisfied by
+// *semantic.Scorer but defined here so package context has no dependency on the
+// embedding machinery — callers that don't configure embeddings never pull it
+// in. Prepare is called once per query (and reports whether semantic scoring is
+// possible); SimilarityFor returns a cosine in [0,1] for a document's text, or
+// ok=false when no comparable vector exists.
+type Semantic interface {
+	Prepare(query string) bool
+	SimilarityFor(id, text string) (float64, bool)
+}
+
+// semanticWeight scales cosine similarity into the same additive range as the
+// lexical signals. At ~0.45 a strong semantic hit (cosine ~0.8) contributes
+// ~0.36 — comparable to a tag match — so it augments rather than dominates.
+const semanticWeight = 0.45
+
+// Option configures Recommend. The zero set of options reproduces the original
+// lexical-only behaviour, so existing callers are unaffected.
+type Option func(*recommendOpts)
+
+type recommendOpts struct {
+	sem Semantic
+}
+
+// WithSemantic adds an embedding-based "semantic-match" signal. A nil scorer,
+// or one whose Prepare reports false, leaves scoring purely lexical.
+func WithSemantic(s Semantic) Option {
+	return func(o *recommendOpts) { o.sem = s }
+}
+
 // Recommend returns context documents relevant to a query.
 // The query can be a natural language description, a file path, or keywords.
 // Documents are scored by tag match, path pattern match, title/name match,
-// and body keyword match, then returned sorted by score descending.
-func Recommend(docs []*Document, query string, maxResults int) []Recommendation {
+// body keyword match, and — when an embedder is configured via WithSemantic —
+// semantic similarity, then returned sorted by score descending.
+func Recommend(docs []*Document, query string, maxResults int, opts ...Option) []Recommendation {
 	if maxResults <= 0 {
 		maxResults = 5
 	}
@@ -29,8 +60,16 @@ func Recommend(docs []*Document, query string, maxResults int) []Recommendation 
 		return nil
 	}
 
+	var o recommendOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	tokens := tokenize(query)
 	isPath := looksLikePath(query)
+
+	// Embed the query once; if the scorer can't prepare, drop to lexical-only.
+	semOK := o.sem != nil && o.sem.Prepare(query)
 
 	var results []Recommendation
 
@@ -66,6 +105,14 @@ func Recommend(docs []*Document, query string, maxResults int) []Recommendation 
 		if bodyScore > 0 {
 			score += bodyScore
 			signals = append(signals, bodySignal)
+		}
+
+		// Signal 5: Semantic similarity (additive; only when configured)
+		if semOK {
+			if sim, ok := o.sem.SimilarityFor(doc.Name, doc.EmbeddingText()); ok && sim > 0 {
+				score += semanticWeight * sim
+				signals = append(signals, "semantic-match")
+			}
 		}
 
 		if score > 0 {

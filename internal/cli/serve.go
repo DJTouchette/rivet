@@ -8,6 +8,7 @@ import (
 	"github.com/djtouchette/rivet/internal/capabilities"
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/context/semantic"
 	"github.com/djtouchette/rivet/internal/mcp"
 	"github.com/djtouchette/rivet/internal/pins"
 	"github.com/djtouchette/rivet/internal/rally"
@@ -62,6 +63,14 @@ Configure Claude Code to use this server by adding to your MCP settings:
 
 			policies := buildPolicies(cfg)
 			srv := mcp.NewServer(reg, exec, contexts, pinReg, policies, version, cfg.Context.ShouldAutoCompact())
+
+			// Optional embedding-based recommend signal. Disabled unless
+			// RIVET_EMBED_BACKEND is set; failures degrade to lexical-only.
+			if scorer, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: semantic recommend disabled: %v\n", err)
+			} else if scorer != nil {
+				srv.SetSemantic(scorer)
+			}
 
 			if debug {
 				srv.SetLogger(log.New(os.Stderr, "[rivet-mcp] ", log.LstdFlags))

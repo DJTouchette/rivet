@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/context/semantic"
 	"github.com/spf13/cobra"
 )
 
@@ -30,9 +31,65 @@ They are organized into three categories:
 		newContextRecommendCmd(),
 		newContextScaffoldCmd(),
 		newContextLintCmd(),
+		newContextIndexCmd(),
 	)
 
 	return cmd
+}
+
+func newContextIndexCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "index",
+		Short: "Precompute context embeddings for semantic recommend",
+		Long: `Embed every context document into a vector cache under ` + semantic.DefaultStoreDir + `.
+
+The cache (manifest.json + vectors.bin) is deterministic and meant to be
+committed to git, so semantic recommend works offline without re-embedding the
+corpus on every run. Re-running only embeds new or changed chunks.
+
+Configure the embedder with environment variables:
+
+  RIVET_EMBED_BACKEND   onnx | ollama | openai   (unset = semantic disabled)
+  RIVET_EMBED_MODEL     model name, or path to a local ONNX model directory
+  RIVET_EMBED_BASE_URL  override API/daemon base URL
+  RIVET_EMBED_API_KEY   bearer token for an HTTP API (never an MCP argument)`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := semantic.ConfigFromEnv()
+			if cfg.Backend == semantic.BackendNone {
+				return fmt.Errorf("no embedder configured: set %s (onnx|ollama|openai)", semantic.EnvBackend)
+			}
+			emb, err := semantic.New(cfg)
+			if err != nil {
+				return err
+			}
+
+			docs, err := rivetctx.Load(".rivet/context")
+			if err != nil {
+				return err
+			}
+			if len(docs) == 0 {
+				fmt.Println("No context documents to index.")
+				return nil
+			}
+
+			store, err := semantic.OpenStore(semantic.DefaultStoreDir, emb.ID(), emb.Dim())
+			if err != nil {
+				return err
+			}
+
+			added, err := semantic.IndexDocs(cmd.Context(), emb, store, docs)
+			if err != nil {
+				return err
+			}
+			if err := store.Save(); err != nil {
+				return err
+			}
+			fmt.Printf("Indexed %d documents (%d new/changed chunks, %d vectors total) into %s\n",
+				len(docs), added, store.Len(), semantic.DefaultStoreDir)
+			fmt.Println("Commit that directory so semantic recommend works offline.")
+			return nil
+		},
+	}
 }
 
 func newContextListCmd() *cobra.Command {
@@ -121,7 +178,15 @@ To add tags and related_paths, use frontmatter in context documents:
 			}
 
 			query := strings.Join(args, " ")
-			recs := rivetctx.Recommend(docs, query, maxResults)
+
+			// Optional semantic signal (env-configured); lexical-only otherwise.
+			var opts []rivetctx.Option
+			if scorer, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: semantic recommend disabled: %v\n", err)
+			} else if scorer != nil {
+				opts = append(opts, rivetctx.WithSemantic(scorer))
+			}
+			recs := rivetctx.Recommend(docs, query, maxResults, opts...)
 
 			learnings, _ := rivetctx.LoadLearnings(".rivet/learnings")
 			learnRecs := rivetctx.RecommendLearnings(learnings, query, maxResults)

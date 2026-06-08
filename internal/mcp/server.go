@@ -190,6 +190,7 @@ type Server struct {
 	logger       *log.Logger
 	autoCompact  bool   // whether to nudge promotion when the log gets long
 	learningsDir string // where rivet.learn writes entries
+	semantic     rivetctx.Semantic // optional embedding-based recommend signal; nil = lexical-only
 
 	// Session state for nudging.
 	reconCallsSinceLearn int
@@ -217,6 +218,12 @@ func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts
 // Used by tests; production code uses the default.
 func (s *Server) SetLearningsDir(dir string) {
 	s.learningsDir = dir
+}
+
+// SetSemantic attaches an optional embedding-based recommend signal. A nil
+// scorer (the default) keeps rivet.context-recommend purely lexical.
+func (s *Server) SetSemantic(sem rivetctx.Semantic) {
+	s.semantic = sem
 }
 
 // SetLogger sets a logger for debug output (written to stderr, never stdout).
@@ -717,7 +724,11 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 		}
 	}
 
-	recs := rivetctx.Recommend(s.contexts, query, 5)
+	var opts []rivetctx.Option
+	if s.semantic != nil {
+		opts = append(opts, rivetctx.WithSemantic(s.semantic))
+	}
+	recs := rivetctx.Recommend(s.contexts, query, 5, opts...)
 
 	if len(recs) == 0 {
 		return &Response{

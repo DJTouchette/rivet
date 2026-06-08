@@ -82,6 +82,33 @@ The `## Learnings` section is where Claude appends new findings. When it grows t
 
 Context docs are exposed as MCP resources, so Claude can pull the right domain knowledge before making changes. The recommendation engine scores docs by tag matches, file path globs, and keyword relevance, so Claude doesn't have to guess which context to read.
 
+### Semantic Retrieval (optional)
+
+By default, recommendation is **lexical** — it matches on shared words, tags, and paths. That misses conceptually-related docs that don't share vocabulary ("how do I authenticate" vs. a doc titled "OAuth setup"). Turn on **semantic retrieval** to add an embedding-based signal on top of the lexical ones. It's purely additive: with nothing configured, behavior is unchanged.
+
+**Pick a backend** (set via environment — the API key is a human/CI concern, never an MCP tool argument, so the agent gets retrieval, not the credential):
+
+| Variable | Meaning |
+|---|---|
+| `RIVET_EMBED_BACKEND` | `onnx` \| `ollama` \| `openai` (unset = disabled) |
+| `RIVET_EMBED_MODEL` | model name, or path to a local ONNX model dir |
+| `RIVET_EMBED_BASE_URL` | override API/daemon base URL |
+| `RIVET_EMBED_API_KEY` | bearer token for an HTTP API |
+
+- **`onnx`** — bundled local model, fully offline (no network, no keys). Built with `-tags onnx`; needs the ONNX Runtime library and a model dir (`model.onnx` + `vocab.txt`, e.g. `bge-small-en-v1.5`). The default build falls back to lexical if it's absent.
+- **`ollama`** — local [Ollama](https://ollama.com) daemon (`nomic-embed-text`). No keys, no egress, but a running daemon.
+- **`openai`** — OpenAI or any OpenAI-compatible `/v1/embeddings` endpoint (`text-embedding-3-small`). Embedding a corpus costs pennies, but text leaves the box.
+
+**Precompute and commit the index:**
+
+```bash
+export RIVET_EMBED_BACKEND=ollama        # or onnx / openai
+rivet context index                      # embeds docs into .rivet/embeddings/
+rivet context recommend "customer refund dispute"
+```
+
+`rivet context index` writes a deterministic, **git-committable** cache (`.rivet/embeddings/manifest.json` + `vectors.bin`) — commit it so retrieval works offline without re-embedding. Re-running only embeds new or changed content; switching models invalidates the cache automatically. Long docs (a wiki) are chunked into overlapping passages, and a doc scores by its best-matching chunk. At query time only the query is embedded (one tiny call); matched docs gain a `semantic-match` signal in the output. If the embedder is unavailable, recommendation silently stays lexical.
+
 ### The Feedback Loop
 
 This is where it gets interesting.
@@ -295,6 +322,7 @@ rivet context list            List context docs
 rivet context show <name>     Read one
 rivet context scaffold        Generate starter docs from recon analysis
 rivet context recommend <q>   "What context is relevant to this task?"
+rivet context index           Precompute embeddings for semantic recommend (optional)
 rivet context lint            Check docs for quality and staleness
 rivet policy status           Show active policies
 rivet schema overview         Configured databases + migration summary

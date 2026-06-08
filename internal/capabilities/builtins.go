@@ -251,7 +251,7 @@ func Builtins() []Capability {
 		{
 			Name:        "witness.run",
 			Kind:        KindTool,
-			Description: "Get the test runner command for changed files — returns a ready-to-execute command like 'mix test path1 path2' or 'go test ./pkg/...'. No args = use git diff. Args: [\"path/to/changed.ex\"]",
+			Description: "Get the test-runner command for the changed files — returns a command STRING (e.g. 'go test ./pkg/...' or 'mix test path1 path2') for you to execute yourself with your shell/Bash tool. This does NOT run the tests; it only tells you the right command to run. No args = use git diff. Args: [\"path/to/changed.ex\"]",
 			Command:     []string{"witness", "select", "--format", "exec"},
 			Output:      "text",
 			Safety:      SafetyLevelSafe,

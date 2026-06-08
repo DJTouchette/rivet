@@ -6,7 +6,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/djtouchette/recon v0.8.0
 	github.com/djtouchette/vaulty v0.4.0
-	github.com/djtouchette/witness v0.2.0
+	github.com/djtouchette/witness v0.4.1
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/microsoft/go-mssqldb v1.9.8
 	github.com/spf13/cobra v1.10.2

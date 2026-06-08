@@ -1,18 +1,19 @@
 //go:build onnx
 
-// This file is the real bundled-model embedder. It is compiled only with
-// `-tags onnx` and depends on:
+// This file is the real bundled-model embedder, compiled only with `-tags onnx`.
+// It depends on:
 //
-//   - github.com/yalue/onnxruntime_go  (go get it; needs libonnxruntime present)
+//   - github.com/yalue/onnxruntime_go  (go get it)
+//   - the ONNX Runtime shared library, located via the RIVET_EMBED_ORT_LIB env
+//     var (path to libonnxruntime.so / .dylib / .dll)
 //   - a model directory (Config.Model) containing:
-//     model.onnx  — a sentence-embedding model exporting input ids/mask and a
-//     token-level last_hidden_state output (e.g. bge-small-en-v1.5)
+//     model.onnx  — a sentence-embedding model (e.g. bge-small-en-v1.5)
 //     vocab.txt   — the WordPiece vocabulary, one token per line
 //
-// It produces mean-pooled, L2-normalised sentence embeddings — the standard
-// recipe for BERT-family encoders like bge/gte/e5. It was authored against the
-// onnxruntime_go API but has NOT been executed in the dev sandbox (no ORT
-// library / model file there); treat the first real run as the validation step.
+// It auto-discovers the model's input/output names, so exports that omit
+// token_type_ids or expose a pre-pooled sentence embedding both work. Output is
+// mean-pooled (for token-level last_hidden_state) and L2-normalised — the
+// standard recipe for BERT-family encoders.
 package semantic
 
 import (
@@ -28,10 +29,18 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+// EnvORTLib points at the ONNX Runtime shared library.
+const EnvORTLib = "RIVET_EMBED_ORT_LIB"
+
 type onnxEmbedder struct {
 	modelDir string
 	tok      *wordPiece
 	maxLen   int
+
+	inputNames []string // subset of input_ids/attention_mask/token_type_ids present
+	hasMask    bool
+	hasTypes   bool
+	outputName string
 
 	mu      sync.Mutex
 	session *ort.DynamicAdvancedSession
@@ -46,21 +55,58 @@ func newONNXEmbedder(cfg Config) (Embedder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
+
 	if !ort.IsInitialized() {
+		if lib := os.Getenv(EnvORTLib); lib != "" {
+			ort.SetSharedLibraryPath(lib)
+		}
 		if err := ort.InitializeEnvironment(); err != nil {
-			return nil, fmt.Errorf("%w: init onnxruntime: %v", ErrUnavailable, err)
+			return nil, fmt.Errorf("%w: init onnxruntime (set %s to libonnxruntime.so): %v", ErrUnavailable, EnvORTLib, err)
 		}
 	}
-	sess, err := ort.NewDynamicAdvancedSession(
-		filepath.Join(cfg.Model, "model.onnx"),
-		[]string{"input_ids", "attention_mask", "token_type_ids"},
-		[]string{"last_hidden_state"},
-		nil,
-	)
+
+	modelPath := filepath.Join(cfg.Model, "model.onnx")
+	inInfo, outInfo, err := ort.GetInputOutputInfo(modelPath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: inspect model: %v", ErrUnavailable, err)
+	}
+
+	e := &onnxEmbedder{modelDir: cfg.Model, tok: tok, maxLen: 256}
+	have := map[string]bool{}
+	for _, in := range inInfo {
+		have[in.Name] = true
+	}
+	// input_ids is mandatory; mask and token_type_ids are included only if the
+	// model declares them.
+	for _, name := range []string{"input_ids", "attention_mask", "token_type_ids"} {
+		if have[name] {
+			e.inputNames = append(e.inputNames, name)
+		}
+	}
+	if !have["input_ids"] {
+		return nil, fmt.Errorf("%w: model has no input_ids input (inputs: %v)", ErrUnavailable, names(inInfo))
+	}
+	e.hasMask = have["attention_mask"]
+	e.hasTypes = have["token_type_ids"]
+	if len(outInfo) == 0 {
+		return nil, fmt.Errorf("%w: model declares no outputs", ErrUnavailable)
+	}
+	e.outputName = outInfo[0].Name
+
+	sess, err := ort.NewDynamicAdvancedSession(modelPath, e.inputNames, []string{e.outputName}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: load model: %v", ErrUnavailable, err)
 	}
-	return &onnxEmbedder{modelDir: cfg.Model, tok: tok, maxLen: 256, session: sess}, nil
+	e.session = sess
+	return e, nil
+}
+
+func names(infos []ort.InputOutputInfo) []string {
+	out := make([]string, len(infos))
+	for i, in := range infos {
+		out[i] = in.Name
+	}
+	return out
 }
 
 func (e *onnxEmbedder) ID() string { return "onnx:" + filepath.Clean(e.modelDir) }
@@ -86,6 +132,7 @@ func (e *onnxEmbedder) Embed(ctx context.Context, texts []string) ([]Vector, err
 func (e *onnxEmbedder) embedOne(text string) (Vector, error) {
 	ids := e.tok.encode(text, e.maxLen)
 	n := int64(len(ids))
+	shape := ort.NewShape(1, n)
 
 	inputIDs := make([]int64, len(ids))
 	mask := make([]int64, len(ids))
@@ -95,26 +142,29 @@ func (e *onnxEmbedder) embedOne(text string) (Vector, error) {
 		mask[i] = 1
 	}
 
-	shape := ort.NewShape(1, n)
-	tIDs, err := ort.NewTensor(shape, inputIDs)
-	if err != nil {
-		return nil, err
+	// Build only the inputs the model declares, in the same order as inputNames.
+	var inputs []ort.Value
+	for _, name := range e.inputNames {
+		var data []int64
+		switch name {
+		case "input_ids":
+			data = inputIDs
+		case "attention_mask":
+			data = mask
+		case "token_type_ids":
+			data = types
+		}
+		tensor, err := ort.NewTensor(shape, data)
+		if err != nil {
+			return nil, err
+		}
+		defer tensor.Destroy()
+		inputs = append(inputs, tensor)
 	}
-	defer tIDs.Destroy()
-	tMask, err := ort.NewTensor(shape, mask)
-	if err != nil {
-		return nil, err
-	}
-	defer tMask.Destroy()
-	tTypes, err := ort.NewTensor(shape, types)
-	if err != nil {
-		return nil, err
-	}
-	defer tTypes.Destroy()
 
 	out := []ort.Value{nil}
 	e.mu.Lock()
-	err = e.session.Run([]ort.Value{tIDs, tMask, tTypes}, out)
+	err := e.session.Run(inputs, out)
 	e.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -125,33 +175,45 @@ func (e *onnxEmbedder) embedOne(text string) (Vector, error) {
 	}
 	defer hidden.Destroy()
 
-	// last_hidden_state shape: [1, seq, dim]. Mean-pool over real tokens.
 	dims := hidden.GetShape()
-	if len(dims) != 3 {
-		return nil, fmt.Errorf("expected 3-D hidden state, got %v", dims)
-	}
-	seq, dim := int(dims[1]), int(dims[2])
 	data := hidden.GetData()
 
-	pooled := make([]float64, dim)
-	count := 0
-	for s := 0; s < seq; s++ {
-		if mask[s] == 0 {
-			continue
+	var pooled []float64
+	switch len(dims) {
+	case 3: // [1, seq, dim] — mean-pool over real tokens.
+		seq, dim := int(dims[1]), int(dims[2])
+		pooled = make([]float64, dim)
+		count := 0
+		for s := 0; s < seq; s++ {
+			if s < len(mask) && mask[s] == 0 {
+				continue
+			}
+			count++
+			base := s * dim
+			for d := 0; d < dim && base+d < len(data); d++ {
+				pooled[d] += float64(data[base+d])
+			}
 		}
-		count++
-		base := s * dim
-		for d := 0; d < dim; d++ {
-			pooled[d] += float64(data[base+d])
+		if count == 0 {
+			count = 1
 		}
+		for d := range pooled {
+			pooled[d] /= float64(count)
+		}
+	case 2: // [1, dim] — already pooled.
+		dim := int(dims[1])
+		pooled = make([]float64, dim)
+		for d := 0; d < dim && d < len(data); d++ {
+			pooled[d] = float64(data[d])
+		}
+	default:
+		return nil, fmt.Errorf("unexpected output rank %d (shape %v)", len(dims), dims)
 	}
-	if count == 0 {
-		count = 1
-	}
-	vec := make(Vector, dim)
+
+	// L2-normalise.
+	vec := make(Vector, len(pooled))
 	var norm float64
-	for d := 0; d < dim; d++ {
-		v := pooled[d] / float64(count)
+	for d, v := range pooled {
 		vec[d] = float32(v)
 		norm += v * v
 	}
@@ -163,7 +225,7 @@ func (e *onnxEmbedder) embedOne(text string) (Vector, error) {
 	}
 
 	e.mu.Lock()
-	e.dim = dim
+	e.dim = len(vec)
 	e.mu.Unlock()
 	return vec, nil
 }

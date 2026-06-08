@@ -28,14 +28,46 @@ tool argument — the agent gets retrieval, not the credential):
 | `RIVET_EMBED_API_KEY` | bearer token for an HTTP API |
 
 - **onnx** — bundled local model, fully offline. Real code in `onnx.go`,
-  compiled only with `-tags onnx` (needs `github.com/yalue/onnxruntime_go`, the
-  ONNX Runtime C library, and a model dir with `model.onnx` + `vocab.txt`, e.g.
-  `bge-small-en-v1.5`). Without the tag the backend reports unavailable and the
-  recommender stays lexical.
+  compiled only with `-tags onnx`. It auto-discovers the model's input/output
+  names and mean-pools + L2-normalises the output. Without the tag the backend
+  reports unavailable and the recommender stays lexical. See the setup below.
 - **ollama** — local Ollama daemon (`nomic-embed-text` by default). No keys, no
   egress, but a running daemon.
 - **openai** — OpenAI or any OpenAI-compatible `/v1/embeddings` endpoint
   (`text-embedding-3-small` by default). Trivial cost, but sends text off-box.
+
+## Setting up the local ONNX backend
+
+The `onnx` backend is opt-in: the heavy `onnxruntime_go` dependency (it bundles
+~70MB of test runtimes) is intentionally kept out of `go.mod`, so the default
+build stays lean. To enable it (verified with ONNX Runtime 1.26.0 +
+`bge-small-en-v1.5`):
+
+```bash
+# 1. Add the binding and build rivet with the onnx tag.
+go get github.com/yalue/onnxruntime_go
+CGO_ENABLED=1 go build -tags onnx -o rivet ./cmd/rivet
+
+# 2. Get the ONNX Runtime shared library. Its version MUST match the binding's
+#    expected API version (v1.31.0 of the binding wants ORT 1.26.0).
+curl -sSL https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-linux-x64-1.26.0.tgz | tar xz
+
+# 3. Get a sentence-embedding model (model.onnx + vocab.txt).
+mkdir -p ~/models/bge-small-en-v1.5 && cd ~/models/bge-small-en-v1.5
+curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/onnx/model.onnx
+curl -sSLO https://huggingface.co/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt
+
+# 4. Point rivet at them and index.
+export RIVET_EMBED_BACKEND=onnx
+export RIVET_EMBED_MODEL=~/models/bge-small-en-v1.5
+export RIVET_EMBED_ORT_LIB=/path/to/libonnxruntime.so.1.26.0
+rivet context index
+```
+
+For the MCP server, set the same three env vars in the rivet entry of your
+`.mcp.json` (`"env": { ... }`). If ORT and the binding versions disagree you'll
+see "The requested API version [N] is not available" — fix by matching the ORT
+release to the binding (`go list -m -versions github.com/yalue/onnxruntime_go`).
 
 ## The cache (committable to git)
 

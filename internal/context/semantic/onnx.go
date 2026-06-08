@@ -109,7 +109,10 @@ func names(infos []ort.InputOutputInfo) []string {
 	return out
 }
 
-func (e *onnxEmbedder) ID() string { return "onnx:" + filepath.Clean(e.modelDir) }
+// ID identifies the model by name (the model directory's base name), not its
+// absolute path, so a committed .rivet/embeddings/ cache stays valid across
+// machines that keep the model in different locations.
+func (e *onnxEmbedder) ID() string { return "onnx:" + filepath.Base(filepath.Clean(e.modelDir)) }
 func (e *onnxEmbedder) Dim() int   { e.mu.Lock(); defer e.mu.Unlock(); return e.dim }
 
 func (e *onnxEmbedder) Embed(ctx context.Context, texts []string) ([]Vector, error) {

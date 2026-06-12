@@ -107,6 +107,16 @@ func Builtins() []Capability {
 			ArgsHint:    "A search pattern, optionally with --type=definition|reference|test|comment to filter. Examples: [\"SMS.send\"], [\"Accounts.\", \"--type\", \"definition\"], [\"register_user\", \"--type\", \"reference\"]",
 		},
 		{
+			Name:        "recon.docs",
+			Kind:        KindTool,
+			Description: "Context docs that live in the code: rivet:context comments and .context/ sidecar markdown, attached to files and symbols. Args: [] for all, [\"file:path\"] for one file's docs, [\"symbol:Name\"] for one symbol's docs",
+			Command:     []string{"recon", "docs"},
+			Output:      "json",
+			Safety:      SafetyLevelSafe,
+			Builtin:     true,
+			ArgsHint:    "Optional query: \"file:path/to/file.go\", \"symbol:ProcessPayment\", or a bare keyword matched against files and symbols. No args = all docs.",
+		},
+		{
 			Name:        "recon.refresh",
 			Kind:        KindTool,
 			Description: "Incremental cache update — re-scans changed files only. No args needed.",

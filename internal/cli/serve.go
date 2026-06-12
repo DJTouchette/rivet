@@ -69,6 +69,15 @@ Configure Claude Code to use this server by adding to your MCP settings:
 				runbooks = nil
 			}
 
+			// Code-extracted docs (rivet:context comments, .context/ sidecars)
+			// come from recon's index; this also warms the recon cache so the
+			// first tool call is fast.
+			codeDocs, err := rivetctx.LoadCodeDocs(recon.Run)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading code docs: %v\n", err)
+				codeDocs = nil
+			}
+
 			pinReg := pins.NewRegistry()
 			pinReg.Add(rally.NewPinProvider())
 
@@ -76,6 +85,7 @@ Configure Claude Code to use this server by adding to your MCP settings:
 			srv := mcp.NewServer(reg, exec, contexts, pinReg, policies, version, cfg.Context.ShouldAutoCompact())
 			srv.SetWiki(wiki)
 			srv.SetRunbooks(runbooks)
+			srv.SetCodeDocs(codeDocs)
 
 			// Optional embedding-based recommend signal. Disabled unless
 			// RIVET_EMBED_BACKEND is set; failures degrade to lexical-only.
@@ -88,10 +98,6 @@ Configure Claude Code to use this server by adding to your MCP settings:
 			if debug {
 				srv.SetLogger(log.New(os.Stderr, "[rivet-mcp] ", log.LstdFlags))
 			}
-
-			// Warm the recon cache in the background so the first
-			// recon tool call doesn't pay the cold-start cost.
-			go recon.Run([]string{"refresh"})
 
 			return srv.Serve(os.Stdin, os.Stdout)
 		},

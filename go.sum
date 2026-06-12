@@ -25,12 +25,8 @@ github.com/danieljoos/wincred v1.2.3/go.mod h1:6qqX0WNrS4RzPZ1tnroDzq9kY3fu1KwE7
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/djtouchette/recon v0.8.0 h1:zyhjzKW7ajQ0ufZvnZs1lfKVVvYsrz7hlIjjYa4gMXI=
-github.com/djtouchette/recon v0.8.0/go.mod h1:C7czQY3g+flwdHVxQHGoq+GQUEas57xSIs52y6UwLF8=
 github.com/djtouchette/vaulty v0.4.0 h1:BIEVMEHS/OFvLZcY4a5HxCGDBMsO6pfBYNuHZLsBcsw=
 github.com/djtouchette/vaulty v0.4.0/go.mod h1:xStYbWtFYLTajuIwxrJwsL9szkPgCI8PaT3mdhbfpK8=
-github.com/djtouchette/witness v0.2.0 h1:QalgcnzAiHmSy5Ay2DBr8CZkSIRV6KpFgQjlMAbxw8g=
-github.com/djtouchette/witness v0.2.0/go.mod h1:IMH7lDTAIRYkzT2XXuiAPNfmgzk1sa/6q9BjVyWK3ss=
 github.com/djtouchette/witness v0.4.1 h1:5mYdZLyqOclGyhUut7m19NqX2xFh1eSdovwDXYBOGdw=
 github.com/djtouchette/witness v0.4.1/go.mod h1:7Vvzdrk5NhqldOyYXGs80mQDVAZxUiyzP7LmDUtVMGk=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
@@ -140,6 +136,8 @@ github.com/tree-sitter/tree-sitter-scala v0.26.0 h1:hpn0hO6cGtAAC9aqyVlp9HDGq9Ee
 github.com/tree-sitter/tree-sitter-scala v0.26.0/go.mod h1:BmDV0f9rgsnGuG9QtKXQZnqJvECyR9fM8wVg984ulBo=
 github.com/tree-sitter/tree-sitter-typescript v0.23.2 h1:/Odvphn18PniVixb9e97X0DbNVsU6Qocv9mfkyzdXwU=
 github.com/tree-sitter/tree-sitter-typescript v0.23.2/go.mod h1:zjzMXT/Ulffel2xfOcAkQQkiAkmgnbtPGlFQw/5X4xA=
+github.com/yalue/onnxruntime_go v1.31.0 h1:1ln4YW1SFOFfGJZXe3jNOb2JUSt+l2pEneZfV8HdtFA=
+github.com/yalue/onnxruntime_go v1.31.0/go.mod h1:b4X26A8pekNb1ACJ58wAXgNKeUCGEAQ9dmACut9Sm/4=
 github.com/zalando/go-keyring v0.2.8 h1:6sD/Ucpl7jNq10rM2pgqTs0sZ9V3qMrqfIIy5YPccHs=
 github.com/zalando/go-keyring v0.2.8/go.mod h1:tsMo+VpRq5NGyKfxoBVjCuMrG47yj8cmakZDO5QGii0=
 go.yaml.in/yaml/v3 v3.0.4/go.mod h1:DhzuOOF2ATzADvBadXxruRBLzYTpT36CKvDb3+aBEFg=

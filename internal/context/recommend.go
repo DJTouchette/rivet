@@ -149,11 +149,15 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 }
 
 // kindWeight scales a doc's score by its retrieval tier. Curated context kinds
-// (domain/module/paradigm) score at full weight; wiki reference docs are
+// (domain/module/paradigm) score at full weight; code-extracted docs sit just
+// below (they're authoritative but narrow); wiki reference docs are
 // down-weighted so they augment rather than outrank code-adjacent context.
 func kindWeight(k Kind) float64 {
-	if k == KindWiki {
+	switch k {
+	case KindWiki:
 		return 0.85
+	case KindCode:
+		return 0.9
 	}
 	return 1.0
 }

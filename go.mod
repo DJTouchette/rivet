@@ -10,6 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.1
 	github.com/microsoft/go-mssqldb v1.9.8
 	github.com/spf13/cobra v1.10.2
+	github.com/yalue/onnxruntime_go v1.31.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -63,3 +64,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.48.1 // indirect
 )
+
+replace github.com/djtouchette/recon => ../recon

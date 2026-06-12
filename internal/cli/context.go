@@ -9,6 +9,7 @@ import (
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
 	"github.com/djtouchette/rivet/internal/context/semantic"
+	"github.com/djtouchette/rivet/internal/recon"
 	"github.com/spf13/cobra"
 )
 
@@ -193,15 +194,23 @@ To add tags and related_paths, use frontmatter in context documents:
 			if err != nil {
 				return err
 			}
-			if len(docs) == 0 {
-				fmt.Println("No context documents found.")
-				fmt.Println("Add markdown files to .rivet/context/{domains,modules,paradigms}/")
-				return nil
-			}
 
 			// Include wiki reference docs (down-weighted by kind) in recommend.
 			if wiki, err := rivetctx.LoadWiki(".", wikiPathsFromConfig()); err == nil {
 				docs = append(docs, wiki...)
+			}
+
+			// Include docs that live in the code itself (rivet:context
+			// comments and .context/ sidecars), also down-weighted.
+			if codeDocs, err := rivetctx.LoadCodeDocs(recon.Run); err == nil {
+				docs = append(docs, codeDocs...)
+			}
+
+			if len(docs) == 0 {
+				fmt.Println("No context documents found.")
+				fmt.Println("Add markdown files to .rivet/context/{domains,modules,paradigms}/,")
+				fmt.Println("or annotate code with rivet:context comments / .context/ sidecar markdown.")
+				return nil
 			}
 
 			query := strings.Join(args, " ")

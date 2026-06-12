@@ -178,6 +178,7 @@ var reconInvestigationTools = map[string]bool{
 	"recon.related": true,
 	"recon.context": true,
 	"recon.symbols": true,
+	"recon.docs":    true,
 }
 
 type Server struct {
@@ -186,6 +187,7 @@ type Server struct {
 	contexts     []*rivetctx.Document
 	wiki         []*rivetctx.Document // free-form reference docs (KindWiki)
 	runbooks     []*rivetctx.Document // actionable procedures (KindRunbook)
+	code         []*rivetctx.Document // docs extracted from code comments / .context/ sidecars (KindCode)
 	pins         *pins.Registry
 	policies     []policy.Rule
 	version      string
@@ -238,6 +240,13 @@ func (s *Server) SetWiki(docs []*rivetctx.Document) {
 // the rivet.runbook tool and as resources.
 func (s *Server) SetRunbooks(docs []*rivetctx.Document) {
 	s.runbooks = docs
+}
+
+// SetCodeDocs attaches docs extracted from rivet:context code comments and
+// .context/ sidecar markdown (KindCode). They're included — slightly
+// down-weighted — in context-recommend and exposed as resources.
+func (s *Server) SetCodeDocs(docs []*rivetctx.Document) {
+	s.code = docs
 }
 
 // SetLogger sets a logger for debug output (written to stderr, never stdout).
@@ -642,10 +651,11 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 // allDocs returns every retrievable document across tiers (context + wiki +
 // runbooks) for resource listing/reading.
 func (s *Server) allDocs() []*rivetctx.Document {
-	all := make([]*rivetctx.Document, 0, len(s.contexts)+len(s.wiki)+len(s.runbooks))
+	all := make([]*rivetctx.Document, 0, len(s.contexts)+len(s.wiki)+len(s.runbooks)+len(s.code))
 	all = append(all, s.contexts...)
 	all = append(all, s.wiki...)
 	all = append(all, s.runbooks...)
+	all = append(all, s.code...)
 	return all
 }
 
@@ -809,9 +819,11 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 	if s.semantic != nil {
 		opts = append(opts, rivetctx.WithSemantic(s.semantic))
 	}
-	// Include wiki reference docs (down-weighted by kind) alongside curated
-	// context docs; runbooks have their own rivet.runbook tool.
+	// Include wiki reference docs and code-extracted docs (both down-weighted
+	// by kind) alongside curated context docs; runbooks have their own
+	// rivet.runbook tool.
 	pool := append(append([]*rivetctx.Document{}, s.contexts...), s.wiki...)
+	pool = append(pool, s.code...)
 	recs := rivetctx.Recommend(pool, query, 5, opts...)
 
 	if len(recs) == 0 {

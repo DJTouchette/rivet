@@ -82,6 +82,30 @@ The `## Learnings` section is where Claude appends new findings. When it grows t
 
 Context docs are exposed as MCP resources, so Claude can pull the right domain knowledge before making changes. The recommendation engine scores docs by tag matches, file path globs, and keyword relevance, so Claude doesn't have to guess which context to read.
 
+### Context Docs in the Code Itself
+
+Some context belongs next to the line it's about. Two in-repo forms feed the same retrieval engine, extracted deterministically by recon:
+
+**`rivet:context` comments** — in any of 25+ languages. A marked comment directly above a declaration attaches to that symbol; `rivet:context(SymbolName)` attaches explicitly; otherwise it's file-level.
+
+```go
+// rivet:context
+// Never call this inside a transaction — the retry
+// scheduler owns rollback.
+func ProcessPayment(o Order) error {
+```
+
+**`.context/` sidecar markdown** — one doc per source file, named after it:
+
+```
+src/orders/
+  handler.go
+  .context/
+    handler.md      ← context doc for handler.go
+```
+
+These show up in `rivet.context-recommend` (weighted just below curated context docs, above wiki), as `rivet://code/...` resources, and through the dedicated `recon.docs` tool (`file:path` or `symbol:Name` to filter).
+
 ### Semantic Retrieval (optional)
 
 By default, recommendation is **lexical** — it matches on shared words, tags, and paths. That misses conceptually-related docs that don't share vocabulary ("how do I authenticate" vs. a doc titled "OAuth setup"). Turn on **semantic retrieval** to add an embedding-based signal on top of the lexical ones. It's purely additive: with nothing configured, behavior is unchanged.
@@ -202,6 +226,7 @@ Claude calls these instead of running raw `grep` and hoping for the best. Recon 
 | `recon.context` | File preview, fan-in/fan-out, churn, hotspot score |
 | `recon.hotspots` | Top files ranked by risk (fan-in * churn) |
 | `recon.tests` | Find test files for a source file |
+| `recon.docs` | Context docs living in the code: `rivet:context` comments + `.context/` sidecar markdown |
 | `recon.overview` | Project structure, languages, frameworks, entrypoints |
 | `recon.changes` | Recent git change summary |
 | `recon.refresh` | Incremental cache update |

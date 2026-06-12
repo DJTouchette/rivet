@@ -18,6 +18,7 @@ const (
 	KindParadigm Kind = "paradigm"
 	KindWiki     Kind = "wiki"    // free-form reference / narrative docs
 	KindRunbook  Kind = "runbook" // actionable, trigger-keyed procedures
+	KindCode     Kind = "code"    // docs extracted from rivet:context code comments / .context/ sidecars
 )
 
 // IsContextKind reports whether a kind is one of the curated, code-adjacent
@@ -54,6 +55,8 @@ func (d *Document) URI() string {
 		return "rivet://wiki/" + d.Name
 	case KindRunbook:
 		return "rivet://runbook/" + d.Name
+	case KindCode:
+		return "rivet://code/" + d.Name
 	default:
 		return fmt.Sprintf("rivet://context/%ss/%s", d.Kind, d.Name)
 	}

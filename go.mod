@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/djtouchette/recon v0.8.0
+	github.com/djtouchette/recon v0.9.0
 	github.com/djtouchette/vaulty v0.4.0
 	github.com/djtouchette/witness v0.4.1
 	github.com/jackc/pgx/v5 v5.9.1
@@ -64,5 +64,3 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.48.1 // indirect
 )
-
-replace github.com/djtouchette/recon => ../recon

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 
 	"github.com/djtouchette/rivet/internal/capabilities"
 	"github.com/djtouchette/rivet/internal/config"
@@ -52,31 +53,41 @@ Configure Claude Code to use this server by adding to your MCP settings:
 			exec.RegisterInProcess("witness", witness.Run)
 			exec.RegisterInProcess("schema", schema.Run)
 
-			contexts, err := rivetctx.Load(".rivet/context")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: loading context: %v\n", err)
-				contexts = nil
+			// The four context tiers load independently — three are disk walks,
+			// LoadCodeDocs shells out to recon to index the repo (the dominant
+			// cost). Run them concurrently so the cheap walks overlap that
+			// subprocess. Each tier degrades gracefully to nil on error, so a
+			// failure warns but never aborts startup.
+			var contexts, wiki, runbooks, codeDocs []*rivetctx.Document
+			var loadWG sync.WaitGroup
+			load := func(label string, dst *[]*rivetctx.Document, fn func() ([]*rivetctx.Document, error)) {
+				loadWG.Add(1)
+				go func() {
+					defer loadWG.Done()
+					docs, err := fn()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: loading %s: %v\n", label, err)
+						return
+					}
+					*dst = docs
+				}()
 			}
-
-			wiki, err := rivetctx.LoadWiki(".", cfg.Context.WikiPaths)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: loading wiki: %v\n", err)
-				wiki = nil
-			}
-			runbooks, err := rivetctx.LoadRunbooks(".")
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: loading runbooks: %v\n", err)
-				runbooks = nil
-			}
-
+			load("context", &contexts, func() ([]*rivetctx.Document, error) {
+				return rivetctx.Load(".rivet/context")
+			})
+			load("wiki", &wiki, func() ([]*rivetctx.Document, error) {
+				return rivetctx.LoadWiki(".", cfg.Context.WikiPaths)
+			})
+			load("runbooks", &runbooks, func() ([]*rivetctx.Document, error) {
+				return rivetctx.LoadRunbooks(".")
+			})
 			// Code-extracted docs (rivet:context comments, .context/ sidecars)
 			// come from recon's index; this also warms the recon cache so the
 			// first tool call is fast.
-			codeDocs, err := rivetctx.LoadCodeDocs(recon.Run)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: loading code docs: %v\n", err)
-				codeDocs = nil
-			}
+			load("code docs", &codeDocs, func() ([]*rivetctx.Document, error) {
+				return rivetctx.LoadCodeDocs(recon.Run)
+			})
+			loadWG.Wait()
 
 			pinReg := pins.NewRegistry()
 			pinReg.Add(rally.NewPinProvider())

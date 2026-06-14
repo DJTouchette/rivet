@@ -5,9 +5,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // Default on-disk locations, relative to the project root.
@@ -94,7 +97,10 @@ func walkDocs(dir string, kind Kind, seen map[string]bool) ([]*Document, error) 
 		return nil, fmt.Errorf("stat %s: %w", dir, err)
 	}
 
-	var docs []*Document
+	// Phase 1: walk the tree (cheap, sequential) to enumerate the files to read.
+	// Dedup runs here while single-threaded, so the seen map needs no lock.
+	type job struct{ path, name string }
+	var jobs []job
 	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -120,15 +126,30 @@ func walkDocs(dir string, kind Kind, seen map[string]bool) ([]*Document, error) 
 			rel = filepath.Base(path)
 		}
 		name := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
-
-		doc, readErr := readDoc(path, name, kind)
-		if readErr != nil {
-			return readErr
-		}
-		docs = append(docs, doc)
+		jobs = append(jobs, job{path: path, name: name})
 		return nil
 	})
 	if err != nil {
+		return nil, fmt.Errorf("walking %s: %w", dir, err)
+	}
+
+	// Phase 2: read + parse files concurrently — the I/O-bound part. Each worker
+	// owns its own slot in docs, so the result slice needs no lock, order is
+	// preserved, and the first read error aborts the group.
+	docs := make([]*Document, len(jobs))
+	g := new(errgroup.Group)
+	g.SetLimit(runtime.GOMAXPROCS(0))
+	for i, j := range jobs {
+		g.Go(func() error {
+			doc, readErr := readDoc(j.path, j.name, kind)
+			if readErr != nil {
+				return readErr
+			}
+			docs[i] = doc
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
 		return nil, fmt.Errorf("walking %s: %w", dir, err)
 	}
 	return docs, nil

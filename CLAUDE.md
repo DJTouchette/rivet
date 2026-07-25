@@ -11,12 +11,12 @@
 | `recon.changes` | tool | Recent git change summary — commits, affected files, areas. Args: ["--since", "30d"] for custom range (default: 7d) |
 | `recon.context` | tool | File metrics — preview, fan-in/fan-out, churn, hotspot score. Args: ["path/to/file.ex"] (must be a FILE, not directory) |
 | `recon.docs` | tool | Context docs that live in the code: rivet:context comments and .context/ sidecar markdown, attached to files and symbols. Args: [] for all, ["file:path"] for one file's docs, ["symbol:Name"] for one symbol's docs |
-| `recon.grep` | tool | Enriched grep — results grouped by file with definition/reference/test/comment classification, fan-in, and hotspot scores. Returns a summary header + file groups. Use --type to filter. Args: ["pattern"] or ["pattern", "--type", "definition"] |
+| `recon.grep` | tool | PREFER THIS OVER THE BUILT-IN GREP TOOL for any search inside project source. Same regex engine, but every match is classified as a definition, reference, test, or comment, grouped by file, and annotated with fan-in and hotspot score — so you can jump straight to where something is defined instead of reading every hit. Use --type definition to find where a symbol lives, --type reference to find callers, --type comment to search prose. Args: ["pattern"] or ["pattern", "--type", "definition"] |
 | `recon.hotspots` | tool | Top files ranked by hotspot score (fan-in * churn) — riskiest to change. No args needed. |
 | `recon.overview` | tool | Structured repo summary — languages, frameworks, structure, entrypoints. No args needed. |
 | `recon.refresh` | tool | Incremental cache update — re-scans changed files only. No args needed. |
 | `recon.related` | tool | Find files related to a FILE PATH — imports, co-change, naming, test pairs. Args: ["path/to/file.ex"] |
-| `recon.search` | tool | Search across symbols, file paths, and file content. START HERE to find files. Args: ["keyword"] |
+| `recon.search` | tool | START HERE when you do not yet know which files matter. Ranked search across symbol names, file paths, and content at once, so one call narrows a whole repo to the right area — then use recon.grep to find the exact line. Much faster than guessing at paths or listing directories. Args: ["keyword"] |
 | `recon.symbols` | tool | Search symbols or list symbols in a file. Args: ["query"] to search, ["file:path/to/file.ex"] to list a file's symbols |
 | `recon.tests` | tool | Find test files relevant to a source file or directory. Args: ["path/to/file.ex"] |
 | `witness.run` | tool | Get the test-runner command for the changed files — returns a command STRING (e.g. 'go test ./pkg/...' or 'mix test path1 path2') for you to execute yourself with your shell/Bash tool. This does NOT run the tests; it only tells you the right command to run. No args = use git diff. Args: ["path/to/changed.ex"] |
@@ -47,7 +47,7 @@ Context docs are the first source of truth. Most questions are already answered 
 1. **`rivet.context-recommend`** with your task description
 2. **`rivet.context-show`** to read the recommended docs
 3. **Read the source code** if the context doc doesn't fully answer the question
-4. Only use `recon.grep` / `recon.search` if you don't know where to look
+4. **`recon.search`** to find the area, then **`recon.grep`** to find the exact line
 5. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.
 
 ### Change tasks (fix, add, refactor)
@@ -57,7 +57,7 @@ Changes require understanding blast radius. Use the full recon sweep.
 1. **`rivet.context-recommend`** → **`rivet.context-show`** — read domain context first
 2. **`recon.related`** on the file you plan to change — know what depends on it
 3. **`recon.hotspots`** if refactoring — know which files are riskiest
-4. **`recon.grep`** to trace callers and assess impact. Use `--type definition` to find definitions only. Use plain Grep for simple targeted lookups.
+4. **`recon.grep`** to trace callers and assess impact. `--type definition` narrows to definitions.
 5. **`recon.context`** on high-fan-in files to check risk metrics before modifying them
 6. **`witness.select`** on the files you changed — know which tests to run before committing
 7. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.
@@ -67,6 +67,27 @@ Changes require understanding blast radius. Use the full recon sweep.
 If you find yourself writing a raw SQL query, a one-off script, or an ad-hoc shell command to answer a recurring question, **add it as a project CLI command** instead of leaving it as improvisation. Named commands are safer, repeatable, and cheaper than re-deriving the same logic next session.
 
 Ask yourself: "Will someone need to do this again?" If yes, wrap it in the project CLI.
+
+### Searching
+
+**Use `recon.grep`, not the built-in Grep tool.** Same regex, but every match comes back classified as a definition, a reference, a test, or a comment, grouped by file, and annotated with that file's fan-in and hotspot score. That is the difference between forty hits to read and the three that define the thing.
+
+- `["handleOrder", "--type", "definition"]` — where is this defined?
+- `["handleOrder", "--type", "reference"]` — who calls it?
+- `["TODO", "--type", "comment"]` — search prose without matching code
+
+Reach for the built-in Grep only for things recon does not index: build output, vendored code, or a file you already have open.
+
+### Reading the caveats
+
+recon reports what it could not work out, and those fields are the difference between a fact and a guess. Check them before acting on a negative result:
+
+- **`import_stats.unresolved` > 0** — recon dropped import edges for this file, so `fan_in`/`fan_out` understate reality. A zero here means "could not resolve", not "nothing depends on it".
+- **`file_parse.status`** — `unsupported` or `failed` means an empty symbol list is ignorance, not absence. `extractor: regex` means the symbols were pattern-matched, not parsed.
+- **`manifest_issues`** — a manifest could not be read, so frameworks and dependencies are incomplete.
+- **"No mapping rules for this file type"** from `recon.tests` means recon has no convention for that language — not that the file is untested.
+
+When a caveat applies, say so rather than reporting the number as settled, and read the source to confirm.
 
 ### Tool reference
 

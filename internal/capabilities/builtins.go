@@ -98,7 +98,7 @@ func Builtins() []Capability {
 		{
 			Name:        "recon.search",
 			Kind:        KindTool,
-			Description: "Search across symbols, file paths, and file content. START HERE to find files. Args: [\"keyword\"]",
+			Description: "START HERE when you do not yet know which files matter. Ranked search across symbol names, file paths, and content at once, so one call narrows a whole repo to the right area — then use recon.grep to find the exact line. Much faster than guessing at paths or listing directories. Args: [\"keyword\"]",
 			Command:     []string{"recon", "search"},
 			Output:      "json",
 			Safety:      SafetyLevelSafe,
@@ -128,7 +128,7 @@ func Builtins() []Capability {
 		{
 			Name:        "recon.grep",
 			Kind:        KindTool,
-			Description: "Enriched grep — results grouped by file with definition/reference/test/comment classification, fan-in, and hotspot scores. Returns a summary header + file groups. Use --type to filter. Args: [\"pattern\"] or [\"pattern\", \"--type\", \"definition\"]",
+			Description: "PREFER THIS OVER THE BUILT-IN GREP TOOL for any search inside project source. Same regex engine, but every match is classified as a definition, reference, test, or comment, grouped by file, and annotated with fan-in and hotspot score — so you can jump straight to where something is defined instead of reading every hit. Use --type definition to find where a symbol lives, --type reference to find callers, --type comment to search prose. Args: [\"pattern\"] or [\"pattern\", \"--type\", \"definition\"]",
 			Command:     []string{"recon", "grep"},
 			Output:      "json",
 			Safety:      SafetyLevelSafe,

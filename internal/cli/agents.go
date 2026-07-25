@@ -74,7 +74,7 @@ Use this investigation sequence unless the task already names an exact file:
 - ` + "`recon.symbols`" + ` on candidate files to inspect API surface
 - ` + "`recon.related`" + ` on the most relevant file to map dependencies and likely blast radius
 - ` + "`recon.context`" + ` on important files to inspect fan-in, fan-out, churn, and hotspot risk
-- ` + "`recon.grep`" + ` only when you need exact callsites, definitions, or references
+- ` + "`recon.grep`" + ` for any text search in project source — prefer it over the plain Grep tool, because it classifies each hit as a definition, reference, test, or comment (` + "`--type definition`" + ` goes straight to where something is defined)
 - ` + "`recon.hotspots`" + ` when the task involves refactoring or risky shared code
 
 4. Read source, not just tool output.
@@ -127,11 +127,16 @@ Use this investigation sequence unless the task already names an exact file:
 - ` + "`recon.symbols`" + ` on candidate files to inspect API surface
 - ` + "`recon.related`" + ` on the most relevant file to map dependencies and likely blast radius
 - ` + "`recon.context`" + ` on important files to inspect fan-in, fan-out, churn, and hotspot risk
-- ` + "`recon.grep`" + ` only when you need exact callsites, definitions, or references
+- ` + "`recon.grep`" + ` for any text search in project source — prefer it over the plain Grep tool, because it classifies each hit as a definition, reference, test, or comment (` + "`--type definition`" + ` goes straight to where something is defined)
 - ` + "`recon.hotspots`" + ` when the task involves refactoring or risky shared code
 
 4. Read source, not just tool output.
 Recon tells you where to look. Open and read the important files before concluding how something works.
+
+Check recon's caveats before trusting a negative result. ` + "`import_stats.unresolved`" + ` above zero
+means import edges were dropped, so fan-in understates reality; ` + "`file_parse.status`" + ` of
+unsupported or failed means an empty symbol list is ignorance rather than absence. A zero from a tool
+that told you it could not resolve something is not evidence.
 
 5. Use ` + "`rivet.learn`" + ` selectively.
 Record findings only when they are:

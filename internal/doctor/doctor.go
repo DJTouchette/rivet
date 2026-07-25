@@ -13,6 +13,7 @@ import (
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
 	"github.com/djtouchette/rivet/internal/context/semantic"
+	schemacfg "github.com/djtouchette/rivet/internal/schema/config"
 )
 
 // Status represents the result of a single check.
@@ -223,7 +224,8 @@ func (r *Result) checkToolGroups(groups capabilities.BuiltinGroups) {
 	// recon.* and witness.* need no configuration and are never gated, so
 	// there's nothing here that could go wrong for them.
 	if groups.Schema {
-		r.add("schema tools", StatusOK, "registered — schema: section is configured")
+		status, msg := schemaSourcesStatus()
+		r.add("schema tools", status, msg)
 	} else {
 		r.add("schema tools", StatusSkip,
 			"not registered — add a database, migrations dir or code_scan root under schema: in .rivet/config.yaml (or force with tools.schema: true)")
@@ -234,6 +236,48 @@ func (r *Result) checkToolGroups(groups capabilities.BuiltinGroups) {
 	} else {
 		r.add("vaulty tools", StatusSkip,
 			"not registered — no vault found; run 'rivet vaulty init' to create one (or force with tools.vaulty: true)")
+	}
+}
+
+// schemaSourcesStatus says which schema tools can actually answer, not merely
+// which are registered.
+//
+// The two are not the same, and reporting only the second is the same
+// over-promise this file already fixed for the semantic index. A `schema:`
+// section containing just a migrations dir registers all six schema.* tools and
+// makes exactly one of them work: `schema migrations` reconstructs the catalog
+// from the .sql files, while tables/describe/indexes/coverage/queries every one
+// fail with "no databases configured". Registered-and-useless reads as ready.
+func schemaSourcesStatus() (Status, string) {
+	cfg, err := schemacfg.Load("")
+	if err != nil {
+		return StatusWarn, fmt.Sprintf("registered, but the schema: section did not parse: %v", err)
+	}
+
+	hasDB := len(cfg.Databases) > 0
+	hasMigrations := len(cfg.Migrations.AllDirs()) > 0
+	hasCodeScan := len(cfg.CodeScan.Roots) > 0
+
+	var have []string
+	if hasDB {
+		have = append(have, fmt.Sprintf("%d database(s)", len(cfg.Databases)))
+	}
+	if hasMigrations {
+		have = append(have, "migrations")
+	}
+	if hasCodeScan {
+		have = append(have, "code_scan")
+	}
+
+	switch {
+	case hasDB:
+		return StatusOK, "registered — " + strings.Join(have, " + ") + " configured"
+	case hasMigrations || hasCodeScan:
+		return StatusWarn, "registered with " + strings.Join(have, " + ") +
+			" but no live database — schema.migrations works (it reconstructs the catalog from .sql files), " +
+			"while tables/describe/indexes/coverage need a connection. Add schema.databases to .rivet/config.yaml to enable them."
+	default:
+		return StatusWarn, "registered but the schema: section names no database, migrations dir or code_scan root — every schema tool will report nothing configured"
 	}
 }
 

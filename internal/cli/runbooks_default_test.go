@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,10 +29,17 @@ func TestEnsureRunbooks(t *testing.T) {
 		t.Fatalf("loaded %d runbooks, want 2", len(books))
 	}
 
-	// An agent on a lexical-only build can find the ONNX setup by symptom.
+	// An agent on a lexical-only build can find the setup procedure by symptom.
 	matches := rivetctx.RecommendRunbooks(books, "turn on semantic search", 5)
 	if len(matches) == 0 || !strings.Contains(matches[0].Title, "semantic search") {
 		t.Errorf("setup runbook not found by symptom: %+v", matches)
+	}
+
+	// The exact query rivet doctor and the README tell people to use must
+	// reach it too — those strings are a promise, not a hint.
+	matches = rivetctx.RecommendRunbooks(books, "set up embeddings", 5)
+	if len(matches) == 0 || matches[0].Name != "setup-semantic-search" {
+		t.Errorf(`"set up embeddings" should rank setup-semantic-search first, got %+v`, matches)
 	}
 
 	// Shipped defaults must be lint-clean (triggers, owner, last_tested set).
@@ -54,5 +63,49 @@ func TestEnsureRunbooks_Idempotent(t *testing.T) {
 		if !strings.Contains(a, "skipped") {
 			t.Errorf("re-running should skip existing files, got %q", a)
 		}
+	}
+}
+
+// A runbook is a shared document, not rivet's own generated output: a team's
+// edits must survive re-running update. But skipping in silence is how a
+// project ends up carrying a procedure rivet rewrote months ago and never
+// hearing about it, so the difference has to be reported.
+func TestEnsureRunbooks_KeepsLocalEditsAndReportsDrift(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if _, err := ensureRunbooks(); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(".rivet", "runbooks", "setup-semantic-search.md")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := string(original) + "\n## Our extra step\n"
+	if err := os.WriteFile(path, []byte(edited), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	actions, err := ensureRunbooks()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != edited {
+		t.Error("a locally edited runbook was overwritten")
+	}
+
+	var reported bool
+	for _, a := range actions {
+		if strings.Contains(a, "setup-semantic-search.md") && strings.Contains(a, "differs") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Errorf("local edit was not reported back to the user; actions = %v", actions)
 	}
 }

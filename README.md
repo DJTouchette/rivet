@@ -135,28 +135,40 @@ These show up in `rivet.context-recommend` (weighted just below curated context 
 
 By default, recommendation is **lexical** — it matches on shared words, tags, and paths. That misses conceptually-related docs that don't share vocabulary ("how do I authenticate" vs. a doc titled "OAuth setup"). Turn on **semantic retrieval** to add an embedding-based signal on top of the lexical ones. It's purely additive: with nothing configured, behavior is unchanged.
 
-**Pick a backend** (set via environment — the API key is a human/CI concern, never an MCP tool argument, so the agent gets retrieval, not the credential):
+**Fastest path** — works with the stock binary, nothing leaves the box:
+
+```bash
+ollama serve &                           # if it isn't already running
+ollama pull nomic-embed-text             # the daemon alone is not enough
+export RIVET_EMBED_BACKEND=ollama
+rivet context index                      # embeds docs into .rivet/embeddings/
+rivet doctor | grep semantic             # confirms the backend actually answers
+```
+
+Measured on a 13k-file C# repo, this is worth most on exactly the queries lexical handles worst — the ones you ask before you know the codebase's vocabulary:
+
+| Query | Lexical | Semantic |
+|---|---|---|
+| "what happens when a lab result comes back" | 0.21 | 0.46 |
+| "where does the nightly billing run start" | 0.21 | 0.45 |
+| "how do we stop a certificate being issued twice" | 0.16 | 0.41 |
+
+**Backends** (set via environment — the API key is a human/CI concern, never an MCP tool argument, so the agent gets retrieval, not the credential):
 
 | Variable | Meaning |
 |---|---|
-| `RIVET_EMBED_BACKEND` | `onnx` \| `ollama` \| `openai` (unset = disabled) |
+| `RIVET_EMBED_BACKEND` | `ollama` \| `openai` \| `onnx` (unset = disabled) |
 | `RIVET_EMBED_MODEL` | model name, or path to a local ONNX model dir |
 | `RIVET_EMBED_BASE_URL` | override API/daemon base URL |
 | `RIVET_EMBED_API_KEY` | bearer token for an HTTP API |
 
-- **`onnx`** — bundled local model, fully offline (no network, no keys). Built with `-tags onnx`; needs the ONNX Runtime library and a model dir (`model.onnx` + `vocab.txt`, e.g. `bge-small-en-v1.5`). The default build falls back to lexical if it's absent.
-- **`ollama`** — local [Ollama](https://ollama.com) daemon (`nomic-embed-text`). No keys, no egress, but a running daemon.
+- **`ollama`** — local [Ollama](https://ollama.com) daemon (`nomic-embed-text`). No keys, no egress, no build. Needs the daemon running *and* the model pulled.
 - **`openai`** — OpenAI or any OpenAI-compatible `/v1/embeddings` endpoint (`text-embedding-3-small`). Embedding a corpus costs pennies, but text leaves the box.
+- **`onnx`** — bundled local model, fully offline with no daemon at all. Built with `-tags onnx`; needs the ONNX Runtime library and a model dir (`model.onnx` + `vocab.txt`, e.g. `bge-small-en-v1.5`). The default build falls back to lexical if it's absent.
 
-**Precompute and commit the index:**
+`rivet context index` writes a deterministic, **git-committable** cache (`.rivet/embeddings/manifest.json` + `vectors.bin`) — commit it so retrieval works offline without re-embedding. Re-running only embeds new or changed content; switching models invalidates the cache automatically. Long docs (a wiki) are chunked into overlapping passages, and a doc scores by its best-matching chunk. At query time only the query is embedded (one tiny call); matched docs gain a `semantic-match` signal in the output.
 
-```bash
-export RIVET_EMBED_BACKEND=ollama        # or onnx / openai
-rivet context index                      # embeds docs into .rivet/embeddings/
-rivet context recommend "customer refund dispute"
-```
-
-`rivet context index` writes a deterministic, **git-committable** cache (`.rivet/embeddings/manifest.json` + `vectors.bin`) — commit it so retrieval works offline without re-embedding. Re-running only embeds new or changed content; switching models invalidates the cache automatically. Long docs (a wiki) are chunked into overlapping passages, and a doc scores by its best-matching chunk. At query time only the query is embedded (one tiny call); matched docs gain a `semantic-match` signal in the output. If the embedder is unavailable, recommendation silently stays lexical.
+**When it breaks, it says so.** A dead or misconfigured embedder never takes retrieval down — it falls back to lexical — but the fallback is announced rather than silent: `rivet context recommend` warns on stderr, the MCP response carries a caveat so the agent knows its ranking is degraded, and `rivet doctor` contacts the backend rather than trusting the env var. Two failures worth knowing about specifically: setting `RIVET_EMBED_BACKEND` in your shell does **not** reach the MCP server Claude Code spawns (put it in `.mcp.json`'s `"env"` block), and the cache key includes the base URL, so pointing `RIVET_EMBED_BASE_URL` at a different host invalidates every cached vector.
 
 ### Wiki & Runbooks
 
@@ -193,7 +205,7 @@ last_tested: 2026-05-01                                # runbooks rot dangerousl
 
 Agents get a matching `rivet.runbook` tool (find-by-symptom / list) — runbooks are **guidance**, so any commands in them run through the agent's normal, overseen tools, never auto-executed. An agent that works through a novel operational problem can draft a runbook (`rivet.runbook-draft` → `.rivet/runbooks/drafts/`), but a draft is **never retrievable until a human reviews and promotes it** (`rivet runbook promote`) — a wrong runbook followed under pressure is worse than none. `rivet context lint` flags runbooks missing `triggers`/`owner` or with a stale/absent `last_tested`.
 
-`rivet init` ships a couple of starter runbooks for operating rivet itself — including **Enable semantic search**, a step-by-step ONNX setup an agent can find (`rivet.runbook find "set up embeddings"`) and follow on a fresh, lexical-only install to turn on the embeddings above.
+`rivet init` ships a couple of starter runbooks for operating rivet itself — including **Enable semantic search**, a step-by-step setup an agent can find (`rivet.runbook find "set up embeddings"`) and follow on a fresh, lexical-only install to turn on the embeddings above, with a symptom→cause table for the ways it fails. Runbooks are yours to edit once written: `rivet update` never overwrites one you've changed, but it does tell you when your copy differs from the version rivet now ships.
 
 ### The Feedback Loop
 

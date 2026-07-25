@@ -134,7 +134,10 @@ func TestToolGroupsReportRegistrationNotAvailability(t *testing.T) {
 		wantHint   string // substring the message must carry
 	}{
 		{"schema off", capabilities.BuiltinGroups{}, "schema tools", StatusSkip, "tools.schema: true"},
-		{"schema on", capabilities.BuiltinGroups{Schema: true}, "schema tools", StatusOK, "registered"},
+		// "schema on" is covered by TestSchemaStatusNamesWhatCanAnswer, which
+		// has to write a config: what a registered schema group can actually do
+		// depends on which sources that config names, so asserting a status
+		// here without one would only pin the no-sources case.
 		{"vaulty off", capabilities.BuiltinGroups{}, "vaulty tools", StatusSkip, "rivet vaulty init"},
 		{"vaulty on", capabilities.BuiltinGroups{Vaulty: true}, "vaulty tools", StatusOK, "registered"},
 	}
@@ -158,6 +161,88 @@ func TestToolGroupsReportRegistrationNotAvailability(t *testing.T) {
 			}
 			if !strings.Contains(got.Message, tt.wantHint) {
 				t.Errorf("message %q missing %q", got.Message, tt.wantHint)
+			}
+		})
+	}
+}
+
+// Registering the schema tools and being able to answer with them are separate
+// facts. A migrations dir alone registers all six and makes exactly one work,
+// so reporting a flat OK tells the reader the opposite of what is true.
+func TestSchemaStatusNamesWhatCanAnswer(t *testing.T) {
+	tests := []struct {
+		name       string
+		configYAML string
+		wantStatus Status
+		wantHints  []string
+	}{
+		{
+			name: "live database",
+			configYAML: `schema:
+  databases:
+    - name: app
+      engine: postgres
+      dsn: postgres://localhost/app
+`,
+			wantStatus: StatusOK,
+			wantHints:  []string{"registered", "database"},
+		},
+		{
+			name: "migrations only",
+			configYAML: `schema:
+  migrations:
+    dir: ./db/migrations
+`,
+			wantStatus: StatusWarn,
+			wantHints:  []string{"migrations", "schema.databases"},
+		},
+		{
+			name: "code scan only",
+			configYAML: `schema:
+  code_scan:
+    roots: [./src]
+`,
+			wantStatus: StatusWarn,
+			wantHints:  []string{"code_scan", "schema.databases"},
+		},
+		{
+			name:       "section with no sources",
+			configYAML: "schema: {}\n",
+			wantStatus: StatusWarn,
+			wantHints:  []string{"no database, migrations dir or code_scan root"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			if err := os.MkdirAll(".rivet", 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(".rivet", "config.yaml"), []byte(tt.configYAML), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			r := &Result{}
+			r.checkToolGroups(capabilities.BuiltinGroups{Schema: true})
+
+			var got *Check
+			for i := range r.Checks {
+				if r.Checks[i].Name == "schema tools" {
+					got = &r.Checks[i]
+				}
+			}
+			if got == nil {
+				t.Fatal("no schema tools check emitted")
+			}
+			if got.Status != tt.wantStatus {
+				t.Errorf("status = %s, want %s (%s)", got.Status, tt.wantStatus, got.Message)
+			}
+			for _, hint := range tt.wantHints {
+				if !strings.Contains(got.Message, hint) {
+					t.Errorf("message %q missing %q", got.Message, hint)
+				}
 			}
 		})
 	}

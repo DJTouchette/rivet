@@ -213,34 +213,47 @@ var goldenQueries = []goldenQuery{
 //	recall@1 = 0.815 (22/27)   recall@3 = 0.963 (26/27)
 //	recall@5 = 0.963 (26/27)   MRR      = 0.894
 //
-// The thresholds below are set AT those measured values, deliberately, so the
+// That first measurement named four scoring defects, three of which have since
+// been fixed in recommend.go:
+//
+//  1. FIXED — scorePathMatch returned a flat 0.7 for ANY matching glob, so a
+//     broad glob (services/billing/**) tied exactly with the specific one
+//     (services/billing/retry/**) and the alphabetical name tiebreak picked the
+//     winner. It now scores by the share of query path segments a pattern pins
+//     down, and takes the best pattern rather than the first.
+//  2. FIXED — a keyword-stuffed wiki doc reached the 1.0 clamp, and the clamp
+//     ran AFTER kindWeight, erasing the 0.85 wiki penalty at exactly the top of
+//     the range where it was meant to bite. Scores are now squashed
+//     asymptotically before the tier weight, so saturation can neither erase a
+//     tier penalty nor collapse distinct scores into a tie.
+//  3. FIXED — no stemming, so "declined" did not match "declines". Query tokens
+//     are now trimmed to a substring probe before matching body and name text.
+//     Single-character tokens are also dropped: the "I" in "how do I…" body-
+//     matched nearly every document and diluted real coverage ratios.
+//  4. OPEN — "reindex the product catalogue" still puts the broad `search`
+//     domain above the specific `search-indexer` module (rank 2). Exact tag
+//     hits now outweigh substring brushes, which was not enough on its own:
+//     here the broad doc wins on a title match, and nothing in the model says a
+//     module is more specific than a domain. Left deliberately — inverting that
+//     generally is a semantic claim the corpus does not justify.
+//
+// Post-fix measurement, same corpus and goldens:
+//
+//	recall@1 = 0.926 (25/27)   recall@3 = 1.000 (27/27)
+//	recall@5 = 1.000 (27/27)   MRR      = 0.957
+//
+// The thresholds below are set AT the post-fix values, deliberately, so the
 // test passes today and can only fail on a regression. They are a floor, not
-// a goal.
+// a goal. Raise them when a change moves them up.
 //
-// Five queries miss at rank 1 today, and the diagnostics name four distinct
-// scoring weaknesses:
-//
-//  1. "services/billing/retry/backoff.go" and "internal/cache/session/store.go"
-//     — scorePathMatch returns a flat 0.7 for ANY matching glob, so a broad
-//     glob (services/billing/**) ties exactly with the specific one
-//     (services/billing/retry/**) and the winner is decided by the alphabetical
-//     name tiebreak. Coin flip, not ranking.
-//  2. "payment retries" — a keyword-stuffed wiki doc reaches the 1.0 clamp,
-//     and the clamp is applied AFTER kindWeight, so the 0.85 wiki penalty is
-//     erased at the top of the range exactly where it was meant to bite.
-//  3. "reindex the product catalogue" — a broad domain doc outranks the
-//     specific module because tag coverage rewards matching a large share of
-//     the query's tokens, with no credit for how specific the match is.
-//  4. "the same charge is declined instantly on every repeat" — no stemming,
-//     so "declined" does not match "declines". Lexical scoring has no route to
-//     the answer at all; this is the case the semantic signal exists for.
-//
-// Tuning work should move these numbers up and raise the constants with them.
+// recall@3 and @5 are now at ceiling, so the instrument's remaining
+// discriminating power is at @1 and MRR. If tuning saturates those too, add
+// harder goldens rather than declaring victory.
 const (
-	baselineRecallAt1 = 0.815
-	baselineRecallAt3 = 0.963
-	baselineRecallAt5 = 0.963
-	baselineMRR       = 0.894
+	baselineRecallAt1 = 0.926
+	baselineRecallAt3 = 1.000
+	baselineRecallAt5 = 1.000
+	baselineMRR       = 0.957
 
 	// evalEpsilon absorbs float64 formatting noise when comparing a freshly
 	// computed metric against a constant literal rounded to three places.

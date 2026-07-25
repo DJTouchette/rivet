@@ -1,6 +1,7 @@
 package context
 
 import (
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -116,12 +117,17 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 		}
 
 		if score > 0 {
+			// Squash the lexical sum into [0,1) *before* the tier weight, not
+			// after. Applying a hard clamp last let a doc that summed past
+			// ~1.18 come out at 1.0 even after its 0.85 wiki penalty, so the
+			// tier weight stopped working exactly at the top of the range where
+			// it was supposed to bite. Squash-then-weight guarantees a wiki doc
+			// can never reach a curated doc's ceiling.
+			score = softCap(score)
+
 			// Down-weight reference tiers (wiki) so curated context docs lead
 			// for code-change queries; runbooks have their own dedicated tool.
 			score *= kindWeight(doc.Kind)
-			if score > 1.0 {
-				score = 1.0
-			}
 			results = append(results, Recommendation{
 				Document: doc,
 				Name:     doc.Name,
@@ -146,6 +152,25 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 	}
 
 	return results
+}
+
+// softCapKnee is where scoring stops being linear. Below it a score is its own
+// raw sum, which keeps the familiar magnitudes; above it the curve bends toward
+// 1.0 without ever reaching it.
+const softCapKnee = 0.8
+
+// softCap maps a raw additive score into [0,1) while preserving order.
+//
+// A hard clamp at 1.0 collapsed every strongly-matching document onto the same
+// value, so the ranking degenerated into the alphabetical name tiebreak exactly
+// among the top results — the place discrimination matters most. An asymptotic
+// curve keeps every distinct sum distinct: more signal always means a higher
+// score, with diminishing returns instead of a cliff.
+func softCap(score float64) float64 {
+	if score <= softCapKnee {
+		return score
+	}
+	return softCapKnee + (1-softCapKnee)*(1-math.Exp(-(score-softCapKnee)/(1-softCapKnee)))
 }
 
 // kindWeight scales a doc's score by its retrieval tier. Curated context kinds
@@ -178,7 +203,11 @@ func tokenize(query string) []string {
 	for _, p := range parts {
 		// Strip path separators for path-like queries
 		p = strings.Trim(p, "/.")
-		if p == "" || noise[p] {
+		// Single characters are dropped, not because they're noise words but
+		// because every signal here matches by substring: the "I" in "how do I
+		// reindex" appears in nearly every document body, so it contributed a
+		// body-match to the entire corpus and diluted real coverage ratios.
+		if p == "" || len(p) < 2 || noise[p] {
 			continue
 		}
 		tokens = append(tokens, p)
@@ -197,6 +226,29 @@ func tokenize(query string) []string {
 	return tokens
 }
 
+// stemProbe trims a common inflectional suffix so a token can be used as a
+// substring probe against unstemmed text: "declined" becomes "declin", which
+// then matches "declines" and "declining" as well. Every signal here already
+// matches by Contains, so shortening the needle is all stemming needs to be.
+//
+// It is deliberately timid. Only suffixes that change meaning rarely are cut,
+// and only when at least minStemLength characters survive — trimming "gas" to
+// "ga" would match far more than it should.
+func stemProbe(tok string) string {
+	const minStemLength = 4
+
+	for _, suffix := range []string{"ing", "ed", "es", "s"} {
+		if !strings.HasSuffix(tok, suffix) {
+			continue
+		}
+		if stem := strings.TrimSuffix(tok, suffix); len(stem) >= minStemLength {
+			return stem
+		}
+		break // a real suffix that's too short to trim — leave the token alone
+	}
+	return tok
+}
+
 func looksLikePath(query string) bool {
 	return strings.Contains(query, "/") || strings.Contains(query, ".")
 }
@@ -207,60 +259,128 @@ func scoreTagMatch(tags []string, tokens []string) (float64, string) {
 		return 0, ""
 	}
 
-	matches := 0
+	// An exact tag hit is worth more than a substring brush, so a doc tagged
+	// exactly "index" outranks one tagged "indexing-pipeline" for that token.
+	const partialCredit = 0.6
+
+	credit := 0.0
+	exact := 0
 	for _, tok := range tokens {
+		// Both sides are stemmed before comparison. Comparing raw forms in one
+		// direction was asymmetric, and comparing them in both directions does
+		// not actually help: "cache" is not a substring of "caching" either way
+		// — they diverge at cach|e vs cach|i. Reducing both to "cach"/"cache"
+		// first is what makes the pair match at all, in either order.
+		probe := stemProbe(tok)
+		best := 0.0
 		for _, tag := range tags {
-			if strings.Contains(strings.ToLower(tag), tok) {
-				matches++
+			tagLower := strings.ToLower(tag)
+			if tagLower == tok {
+				best = 1.0
 				break
 			}
+			tagProbe := stemProbe(tagLower)
+			if strings.Contains(tagProbe, probe) || strings.Contains(probe, tagProbe) {
+				best = partialCredit
+			}
 		}
+		if best == 1.0 {
+			exact++
+		}
+		credit += best
 	}
 
-	if matches == 0 {
+	if credit == 0 {
 		return 0, ""
 	}
 
-	// Score based on fraction of tokens matched
-	coverage := float64(matches) / float64(len(tokens))
+	// Score on the share of the query the tags account for, weighted by how
+	// exactly they account for it.
+	coverage := credit / float64(len(tokens))
 	weight := 0.5 * coverage
-	if matches == len(tokens) {
-		weight = 0.6 // all tokens matched tags
+	if exact == len(tokens) {
+		weight = 0.6 // every token landed on a tag exactly
 	}
 
 	return weight, "tag-match"
 }
 
-// scorePathMatch checks if the query path matches any related_paths glob patterns.
+// Path matches are scored on how much of the query path the pattern actually
+// pins down. A flat score made `services/billing/**` tie exactly with
+// `services/billing/retry/**` for a file under the latter, leaving the
+// alphabetical name tiebreak to pick the winner — a coin flip on the one signal
+// path queries depend on entirely.
+const (
+	pathMatchBase  = 0.5 // a match that pins down almost nothing
+	pathMatchRange = 0.3 // added in proportion to specificity, so 0.8 is exact
+)
+
+// scorePathMatch checks if the query path matches any related_paths glob
+// patterns, scoring by the specificity of the *best*-matching pattern. Patterns
+// are all considered rather than returning on the first hit — a doc listing
+// both a broad and a narrow pattern should be credited for the narrow one.
 func scorePathMatch(patterns []string, queryPath string) (float64, string) {
 	if len(patterns) == 0 {
 		return 0, ""
 	}
 
 	queryPath = filepath.Clean(queryPath)
+	querySegments := len(strings.Split(queryPath, "/"))
 
+	best := 0.0
 	for _, pattern := range patterns {
-		// Try direct glob match
-		if matched, _ := filepath.Match(pattern, queryPath); matched {
-			return 0.7, "path-match"
+		if !pathPatternMatches(pattern, queryPath) {
+			continue
 		}
-
-		// Try prefix match for directory patterns
-		cleanPattern := strings.TrimSuffix(pattern, "/**")
-		cleanPattern = strings.TrimSuffix(cleanPattern, "/*")
-		if cleanPattern != pattern && strings.HasPrefix(queryPath, cleanPattern) {
-			return 0.7, "path-match"
-		}
-
-		// Try ** glob (manual matching)
-		if strings.Contains(pattern, "**") {
-			if matchDoubleGlob(pattern, queryPath) {
-				return 0.7, "path-match"
-			}
+		if s := pathMatchBase + pathMatchRange*pathSpecificity(pattern, querySegments); s > best {
+			best = s
 		}
 	}
 
-	return 0, ""
+	if best == 0 {
+		return 0, ""
+	}
+	return best, "path-match"
+}
+
+// pathPatternMatches reports whether a related_paths pattern covers a path,
+// trying direct glob, directory-prefix, and ** forms in that order.
+func pathPatternMatches(pattern, queryPath string) bool {
+	if matched, _ := filepath.Match(pattern, queryPath); matched {
+		return true
+	}
+
+	// Directory patterns: "a/b/**" and "a/b/*" both cover everything under a/b.
+	cleanPattern := strings.TrimSuffix(pattern, "/**")
+	cleanPattern = strings.TrimSuffix(cleanPattern, "/*")
+	if cleanPattern != pattern && strings.HasPrefix(queryPath, cleanPattern) {
+		return true
+	}
+
+	return strings.Contains(pattern, "**") && matchDoubleGlob(pattern, queryPath)
+}
+
+// pathSpecificity returns, in [0,1], the fraction of the query path's segments
+// a pattern names literally. `services/billing/**` pins two of four segments in
+// `services/billing/retry/backoff.go` (0.5); `services/billing/retry/**` pins
+// three (0.75); a pattern with no wildcards at all pins everything (1.0).
+func pathSpecificity(pattern string, querySegments int) float64 {
+	if querySegments <= 0 {
+		return 0
+	}
+
+	literal := 0
+	for _, seg := range strings.Split(filepath.Clean(pattern), "/") {
+		if strings.ContainsAny(seg, "*?[") {
+			break // everything from the first wildcard on is unpinned
+		}
+		literal++
+	}
+
+	if literal > querySegments {
+		literal = querySegments
+	}
+	return float64(literal) / float64(querySegments)
 }
 
 // matchDoubleGlob handles ** patterns like "backend/Handlers/PaymentGateway/**"
@@ -294,7 +414,8 @@ func scoreNameMatch(name, title string, tokens []string) (float64, string) {
 
 	matches := 0
 	for _, tok := range tokens {
-		if strings.Contains(nameLower, tok) || strings.Contains(titleLower, tok) {
+		probe := stemProbe(tok)
+		if strings.Contains(nameLower, probe) || strings.Contains(titleLower, probe) {
 			matches++
 		}
 	}
@@ -424,7 +545,7 @@ func scoreBodyMatch(body string, tokens []string) (float64, string) {
 	bodyLower := strings.ToLower(body)
 	matches := 0
 	for _, tok := range tokens {
-		if strings.Contains(bodyLower, tok) {
+		if strings.Contains(bodyLower, stemProbe(tok)) {
 			matches++
 		}
 	}

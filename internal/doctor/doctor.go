@@ -1,11 +1,13 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/djtouchette/rivet/internal/capabilities"
 	"github.com/djtouchette/rivet/internal/config"
@@ -243,23 +245,79 @@ func (r *Result) checkToolGroups(groups capabilities.BuiltinGroups) {
 // and a project that has run `rivet context index` has already paid to build the
 // thing. Found in the wild: a 1.2 MB committed vectors.bin doing nothing,
 // because the environment that built it was not the environment querying it.
+//
+// Reading RIVET_EMBED_BACKEND is not enough to answer the question. The first
+// version of this check reported OK — "index present and ollama backend
+// configured" — with Ollama unreachable and the model not pulled, because the
+// env var was set. A health check that only reads its own configuration cannot
+// distinguish working from broken, which is the entire failure it exists to
+// catch. So this one contacts the backend and compares the index's model
+// against the configured one.
 func (r *Result) checkSemanticIndex() {
 	vectors := filepath.Join(semantic.DefaultStoreDir, "vectors.bin")
 	info, err := os.Stat(vectors)
 	indexPresent := err == nil && info.Size() > 0
 
-	backend := semantic.ConfigFromEnv().Backend
+	cfg := semantic.ConfigFromEnv()
 
-	switch {
-	case indexPresent && backend == "":
-		r.add("semantic search", StatusWarn,
-			fmt.Sprintf("index built (%s) but RIVET_EMBED_BACKEND is unset — retrieval is lexical-only and the index is unused. Set the backend that built it, e.g. RIVET_EMBED_BACKEND=ollama", vectors))
-	case indexPresent:
-		r.add("semantic search", StatusOK, "index present and "+backend+" backend configured")
-	case backend != "":
-		r.add("semantic search", StatusWarn,
-			"backend "+backend+" configured but no index — run 'rivet context index' so queries do not embed the corpus on demand")
-	default:
+	if cfg.Backend == "" {
+		if indexPresent {
+			r.add("semantic search", StatusWarn,
+				fmt.Sprintf("index built (%s) but RIVET_EMBED_BACKEND is unset — retrieval is lexical-only and the index is unused. Set the backend that built it, e.g. RIVET_EMBED_BACKEND=ollama", vectors))
+			return
+		}
 		r.add("semantic search", StatusSkip, "not configured — retrieval is lexical only (see 'rivet runbook find \"set up embeddings\"')")
+		return
 	}
+
+	emb, err := semantic.New(cfg)
+	if err != nil || emb == nil {
+		r.add("semantic search", StatusFail,
+			fmt.Sprintf("RIVET_EMBED_BACKEND=%s could not be constructed: %v — retrieval silently falls back to lexical", cfg.Backend, err))
+		return
+	}
+
+	// Probe. A backend that cannot embed one short string cannot serve a query,
+	// and the failure is otherwise invisible: recommend exits 0 with lexical
+	// results that look exactly like a correctly-lexical run.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := emb.Embed(ctx, []string{"rivet doctor probe"}); err != nil {
+		r.add("semantic search", StatusFail, fmt.Sprintf(
+			"backend %s (%s) is configured but not answering: %v — retrieval is silently falling back to lexical. For ollama, check the daemon is running and the model is pulled ('ollama pull %s')",
+			cfg.Backend, emb.ID(), err, ollamaModelHint(cfg.Model)))
+		return
+	}
+
+	if !indexPresent {
+		r.add("semantic search", StatusWarn,
+			"backend "+cfg.Backend+" is reachable but there is no index — run 'rivet context index' so queries do not embed the corpus on demand")
+		return
+	}
+
+	// The index is on disk and the backend works — but they may not be the same
+	// model. The store's key embeds the base URL as well as the model name, so
+	// pointing at a different host silently invalidates every cached vector.
+	store, err := semantic.OpenStore(semantic.DefaultStoreDir, emb.ID(), emb.Dim())
+	if err != nil {
+		r.add("semantic search", StatusWarn, fmt.Sprintf("backend %s works but the index could not be read: %v", cfg.Backend, err))
+		return
+	}
+	if was, discarded := store.Discarded(); discarded {
+		r.add("semantic search", StatusWarn, fmt.Sprintf(
+			"index at %s was built by %q but the configured backend is %q — the cached vectors are unusable and every query re-embeds on demand. Re-run 'rivet context index', or point RIVET_EMBED_MODEL/RIVET_EMBED_BASE_URL back at the model that built it",
+			vectors, was, emb.ID()))
+		return
+	}
+
+	r.add("semantic search", StatusOK, fmt.Sprintf("%s reachable, %d cached vectors match %s", cfg.Backend, store.Len(), emb.ID()))
+}
+
+// ollamaModelHint names the model an ollama user needs to pull, filling in the
+// default that newHTTPEmbedder would have applied when none was configured.
+func ollamaModelHint(model string) string {
+	if model == "" {
+		return "nomic-embed-text"
+	}
+	return model
 }

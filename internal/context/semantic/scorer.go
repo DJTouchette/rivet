@@ -1,6 +1,9 @@
 package semantic
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Scorer ranks documents against a query using cached vectors. It implements
 // the context.Semantic interface (Prepare / SimilarityFor) without importing
@@ -21,7 +24,15 @@ type Scorer struct {
 	ctx   context.Context
 
 	qChunks []Vector // query chunk vectors, set by Prepare
+	lastErr error    // most recent embed failure, surfaced by Err
 }
+
+// Err returns the most recent embedding failure, or nil if every embed call
+// succeeded (or none was needed). A Scorer whose Prepare returned false and
+// whose Err is non-nil means semantic scoring was configured and broken, as
+// opposed to configured and merely unnecessary — callers should say so rather
+// than presenting lexical-only results as if nothing were wrong.
+func (s *Scorer) Err() error { return s.lastErr }
 
 // NewScorer builds a scorer over a store. emb may be nil, in which case the
 // scorer serves only what is already cached and never makes a network/model
@@ -106,7 +117,17 @@ func (s *Scorer) vectorsFor(text string) []Vector {
 
 	if len(missing) > 0 && s.emb != nil {
 		embedded, err := s.emb.Embed(s.ctx, missing)
-		if err == nil && len(embedded) == len(missing) {
+		switch {
+		case err != nil:
+			// Retained, not returned: falling back to lexical is the right
+			// behaviour, but the caller needs to be able to say that it
+			// happened. Dropping this made a broken backend indistinguishable
+			// from an unconfigured one — same results, same exit code, no
+			// mention of either.
+			s.lastErr = err
+		case len(embedded) != len(missing):
+			s.lastErr = fmt.Errorf("embedder returned %d vectors for %d inputs", len(embedded), len(missing))
+		default:
 			for i, slot := range missingIdx {
 				vecs[slot] = embedded[i]
 				_ = s.store.Put(HashText(model, missing[i]), embedded[i])

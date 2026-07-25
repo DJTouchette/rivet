@@ -849,6 +849,7 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 		sb.WriteString(fmt.Sprintf("        signals: %s\n", strings.Join(r.Signals, ", ")))
 		sb.WriteString(fmt.Sprintf("        uri: %s\n\n", r.URI))
 	}
+	sb.WriteString(semanticCaveat(s.semantic))
 
 	return &Response{
 		JSONRPC: "2.0",
@@ -916,7 +917,35 @@ func (s *Server) handleRunbook(req *Request, query string) *Response {
 			sb.WriteString(fmt.Sprintf("  %.2f  %s — %s\n", m.Score, m.Name, m.Title))
 		}
 	}
+	sb.WriteString(semanticCaveat(s.semantic))
 	return text(sb.String())
+}
+
+// semanticCaveat returns a caveat line when an embedding backend was configured
+// but failed to answer, so the agent knows this ranking is degraded rather than
+// authoritative. It returns "" when semantic scoring is off (normal) or working.
+//
+// This is the same contract as recon's import_stats.unresolved and
+// file_parse.status: a weaker answer must announce itself, because an agent
+// cannot tell a lexical-only ranking from a semantic one by looking at it, and
+// will otherwise treat "the best I could do without embeddings" as "the best
+// match that exists".
+//
+// The Semantic interface deliberately does not carry Err — package context has
+// no business knowing about embedder transport failures — so this type-asserts
+// for it and stays silent for implementations that do not report one.
+func semanticCaveat(sem rivetctx.Semantic) string {
+	reporter, ok := sem.(interface{ Err() error })
+	if !ok || reporter == nil {
+		return ""
+	}
+	err := reporter.Err()
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("\nCaveat: semantic ranking was configured but unavailable (%v), so these results are "+
+		"lexical-only and may miss documents that match in meaning rather than wording. "+
+		"Treat a weak or empty result as inconclusive, and search the source directly.\n", err)
 }
 
 // handleRunbookDraft implements rivet.runbook-draft: the agent drafts a runbook

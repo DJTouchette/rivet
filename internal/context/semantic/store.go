@@ -31,7 +31,26 @@ type Store struct {
 	vecs  []Vector       // slot -> vector
 	dir   string
 	dirty bool
+
+	// discardedModel is the model ID of an on-disk index that was present but
+	// incompatible, so OpenStore dropped it. Empty when nothing was dropped.
+	// Discarding is correct — mismatched vectors would be compared across
+	// incompatible spaces — but doing it silently is not: the index costs real
+	// time to build, and the model ID embeds the base URL, so merely pointing
+	// RIVET_EMBED_BASE_URL at a different Ollama host throws the whole cache
+	// away and re-embeds on demand. Callers surface this; see Discarded.
+	discardedModel string
 }
+
+// Discarded reports an on-disk index that was found but not used because it was
+// built by a different model or dimension, returning that index's model ID. The
+// bool is false when nothing was discarded.
+func (st *Store) Discarded() (string, bool) {
+	return st.discardedModel, st.discardedModel != ""
+}
+
+// Model returns the model ID this store's vectors are keyed under.
+func (st *Store) Model() string { return st.model }
 
 type manifest struct {
 	Model   string         `json:"model"`
@@ -81,8 +100,13 @@ func OpenStore(dir, modelID string, dim int) (*Store, error) {
 		return nil, fmt.Errorf("parse manifest: %w", err)
 	}
 	// A different model or dimension means the cached space is incompatible:
-	// drop it and start fresh rather than serve mismatched vectors.
+	// drop it and start fresh rather than serve mismatched vectors. Record what
+	// was dropped so the caller can say so instead of silently re-embedding.
 	if mf.Model != modelID || (dim > 0 && mf.Dim != dim) {
+		st.discardedModel = mf.Model
+		if st.discardedModel == "" {
+			st.discardedModel = fmt.Sprintf("dim=%d", mf.Dim)
+		}
 		return st, nil
 	}
 

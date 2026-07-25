@@ -119,12 +119,15 @@ func newRunbookFindCmd() *cobra.Command {
 			}
 
 			var opts []rivetctx.Option
-			if scorer, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err == nil && scorer != nil {
-				opts = append(opts, rivetctx.WithSemantic(scorer))
+			var scorer *semantic.Scorer
+			if s, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err == nil && s != nil {
+				scorer = s
+				opts = append(opts, rivetctx.WithSemantic(s))
 			}
 
 			query := strings.Join(args, " ")
 			matches := rivetctx.RecommendRunbooks(runbooks, query, maxResults, opts...)
+			warnSemanticFailure(scorer)
 
 			if jsonOutput {
 				enc := json.NewEncoder(os.Stdout)

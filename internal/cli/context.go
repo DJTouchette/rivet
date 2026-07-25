@@ -228,12 +228,15 @@ To add tags and related_paths, use frontmatter in context documents:
 
 			// Optional semantic signal (env-configured); lexical-only otherwise.
 			var opts []rivetctx.Option
-			if scorer, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err != nil {
+			var scorer *semantic.Scorer
+			if s, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: semantic recommend disabled: %v\n", err)
-			} else if scorer != nil {
-				opts = append(opts, rivetctx.WithSemantic(scorer))
+			} else if s != nil {
+				scorer = s
+				opts = append(opts, rivetctx.WithSemantic(s))
 			}
 			recs := rivetctx.Recommend(docs, query, maxResults, opts...)
+			warnSemanticFailure(scorer)
 
 			learnings, _ := rivetctx.LoadLearnings(".rivet/learnings")
 			learnRecs := rivetctx.RecommendLearnings(learnings, query, maxResults)

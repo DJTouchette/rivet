@@ -45,7 +45,12 @@ func (r *Result) HasFailures() bool {
 }
 
 // Run executes all doctor checks and returns the result.
-func Run() *Result {
+//
+// groups is the set of optional builtin tool groups this project actually gets,
+// resolved by the caller. Doctor deliberately does not re-derive it: duplicating
+// the detection is how doctor came to report vaulty as "available" while the
+// registry withheld every vaulty.* tool.
+func Run(groups capabilities.BuiltinGroups) *Result {
 	r := &Result{}
 
 	r.checkRivetDir()
@@ -54,7 +59,7 @@ func Run() *Result {
 	r.checkCapabilities(cfg)
 	r.checkContextDirs()
 	r.checkContextFiles()
-	r.checkVaulty()
+	r.checkToolGroups(groups)
 
 	return r
 }
@@ -202,12 +207,28 @@ func (r *Result) checkContextFiles() {
 	}
 }
 
-func (r *Result) checkVaulty() {
-	// Vaulty is embedded, so it's always available as an in-process runner.
-	// But check if the vaulty binary is also on PATH for standalone use.
-	if _, err := exec.LookPath("vaulty"); err != nil {
-		r.add("vaulty", StatusOK, "available (embedded only, not on PATH)")
+// checkToolGroups reports which optional builtin groups this project exposes
+// over MCP, and how to turn on the ones it doesn't.
+//
+// It used to report vaulty as "available (embedded + PATH)", which was true of
+// the binary and irrelevant to the question anyone is asking. The tools are
+// registered only when a vault exists, so doctor could cheerfully say
+// "available" for six tools Claude could not see. What matters is whether the
+// tools are there, and if not, what to do about it.
+func (r *Result) checkToolGroups(groups capabilities.BuiltinGroups) {
+	// recon.* and witness.* need no configuration and are never gated, so
+	// there's nothing here that could go wrong for them.
+	if groups.Schema {
+		r.add("schema tools", StatusOK, "registered — schema: section is configured")
 	} else {
-		r.add("vaulty", StatusOK, "available (embedded + PATH)")
+		r.add("schema tools", StatusSkip,
+			"not registered — add a database, migrations dir or code_scan root under schema: in .rivet/config.yaml (or force with tools.schema: true)")
+	}
+
+	if groups.Vaulty {
+		r.add("vaulty tools", StatusOK, "registered — a vault is configured")
+	} else {
+		r.add("vaulty tools", StatusSkip,
+			"not registered — no vault found; run 'rivet vaulty init' to create one (or force with tools.vaulty: true)")
 	}
 }

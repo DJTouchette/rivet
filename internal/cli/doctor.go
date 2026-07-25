@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/djtouchette/rivet/internal/config"
 	"github.com/djtouchette/rivet/internal/doctor"
 	"github.com/spf13/cobra"
 )
@@ -13,7 +14,13 @@ func newDoctorCmd() *cobra.Command {
 		Short: "Validate the Rivet environment",
 		Long:  "Checks that .rivet/ is properly set up: config parseable, project CLI exists, capabilities valid, context well-formed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result := doctor.Run()
+			// Resolve the gated tool groups the same way buildRegistry does, so
+			// doctor reports what Claude actually gets rather than a guess.
+			cfg, err := config.LoadOrDefault("")
+			if err != nil {
+				return err
+			}
+			result := doctor.Run(builtinGroupsFor(cfg))
 
 			for _, c := range result.Checks {
 				icon := statusIcon(c.Status)

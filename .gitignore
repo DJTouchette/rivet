@@ -20,10 +20,11 @@ coverage.txt
 .DS_Store
 Thumbs.db
 
-# Rivet runtime (generated in target projects, not in rivet itself)
+# Rivet runtime caches — derived from the tree, regenerated on demand.
+# .rivet/context, wiki, runbooks and embeddings are intentionally committed.
 .rivet/cache/
+.rivet/recon/
 .recon/
-next_steps.md
 
 # goreleaser build output
 dist/

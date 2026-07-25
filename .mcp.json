@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "rivet": {
+      "command": "rivet",
+      "args": [
+        "serve"
+      ]
+    }
+  }
+}

@@ -224,6 +224,134 @@ func TestApplyDefaultsMixedBatch(t *testing.T) {
 	}
 }
 
+// The Elixir scaffold's discover task is a Mix task inside the project's
+// namespace, so the discover command is `mix <ns>.rivet_discover` — two tokens.
+// RunDiscover used to exec the fixed argv ["rivet-discover"], which no Mix
+// project has, so every Elixir project was told "no rivet-discover support".
+func TestRunDiscoverWithMultiTokenCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script test not supported on windows")
+	}
+
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fakemix")
+	// Answers only the namespaced task, exactly like `mix`: a top-level
+	// "rivet-discover" task does not exist and exits non-zero.
+	content := `#!/bin/sh
+if [ "$1" = "demo.rivet_discover" ]; then
+  echo '{"capabilities":[{"name":"demo.status","command":["mix","demo.query.status"],"safety":"safe"}]}'
+  exit 0
+fi
+echo "** (Mix) The task \"$1\" could not be found" >&2
+exit 1
+`
+	if err := os.WriteFile(script, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantCaps int
+	}{
+		{"default argv finds nothing", nil, 0},
+		{"empty argv falls back to the default", []string{""}, 0},
+		{"configured argv reaches the namespaced task", []string{"demo.rivet_discover"}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := RunDiscover(script, tt.args...)
+			if err != nil {
+				t.Fatalf("RunDiscover() error: %v", err)
+			}
+			got := 0
+			if result != nil {
+				got = len(result.Capabilities)
+			}
+			if got != tt.wantCaps {
+				t.Errorf("got %d capabilities, want %d", got, tt.wantCaps)
+			}
+		})
+	}
+}
+
+// A project that configures no discover command, or configures an empty one,
+// must not end up exec'ing the bare CLI and parsing its help text as JSON.
+func TestNormalizeDiscoverArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil falls back to the default", nil, []string{"rivet-discover"}},
+		{"empty slice falls back to the default", []string{}, []string{"rivet-discover"}},
+		{"blank tokens fall back to the default", []string{"", "  "}, []string{"rivet-discover"}},
+		{"single token is kept", []string{"rivet-discover"}, []string{"rivet-discover"}},
+		{"multiple tokens are kept in order", []string{"run", "discover"}, []string{"run", "discover"}},
+		{"blank tokens are dropped from a real argv", []string{"project.rivet_discover", ""}, []string{"project.rivet_discover"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeDiscoverArgs(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got %v, want %v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// Mix prints its build chatter to stdout, so the first discovery after editing
+// the discover task arrives with "Compiling 1 file (.ex)" glued to the front of
+// the JSON. Refusing that would mean registration fails on the first run and
+// works on the second — while genuinely broken output must still be an error.
+func TestParseDiscoverOutput(t *testing.T) {
+	valid := `{"capabilities":[{"name":"demo.status"}]}`
+
+	tests := []struct {
+		name     string
+		out      string
+		wantCaps int
+		wantErr  bool
+	}{
+		{"clean json", valid, 1, false},
+		{"build preamble is skipped", "Compiling 1 file (.ex)\n" + valid, 1, false},
+		{"leading whitespace is fine", "\n\n" + valid, 1, false},
+		{"not json at all", "not json at all", 0, true},
+		{"preamble then broken json", "Compiling 1 file (.ex)\n{\"capabilities\":", 0, true},
+		{"empty envelope", `{}`, 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDiscoverOutput([]byte(tt.out))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error for %q", tt.out)
+				}
+				// The raw output has to be in the message, or a user staring at
+				// "invalid character" has no idea which line of chatter did it.
+				if !strings.Contains(err.Error(), tt.out) {
+					t.Errorf("error %v does not quote the output", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDiscoverOutput: %v", err)
+			}
+			if len(got.Capabilities) != tt.wantCaps {
+				t.Errorf("got %d capabilities, want %d", len(got.Capabilities), tt.wantCaps)
+			}
+		})
+	}
+}
+
 func TestRunDiscoverWithBadJSON(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test not supported on windows")

@@ -106,18 +106,3 @@ func TestElixirModName(t *testing.T) {
 		}
 	}
 }
-
-func TestDiscoverElixirCapabilities(t *testing.T) {
-	caps := DiscoverElixirCapabilities("project")
-	if len(caps) != 3 {
-		t.Fatalf("expected 3 capabilities, got %d", len(caps))
-	}
-
-	// First should be status.
-	if caps[0].Name != "project.status" {
-		t.Errorf("expected project.status, got %s", caps[0].Name)
-	}
-	if caps[0].Command[0] != "mix" {
-		t.Errorf("expected mix as command runner, got %s", caps[0].Command[0])
-	}
-}

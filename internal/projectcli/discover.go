@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // defaultSafety is what a discovered capability gets when its rivet-discover
@@ -43,10 +44,36 @@ type DiscoverResult struct {
 	Capabilities []DiscoveredCapability `json:"capabilities"`
 }
 
-// RunDiscover executes `<binary> rivet-discover` and parses the output.
+// DefaultDiscoverArgs is the argv appended to the project CLI when the project
+// doesn't say otherwise: the hidden subcommand the Go scaffold registers.
+func DefaultDiscoverArgs() []string { return []string{"rivet-discover"} }
+
+// NormalizeDiscoverArgs drops empty tokens and falls back to the default.
+//
+// A config that says `discover: []` or `discover: [""]` means "I didn't
+// configure this", not "run the binary with no arguments" — the latter would
+// exec the CLI's bare help output and try to parse it as JSON.
+func NormalizeDiscoverArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if strings.TrimSpace(a) != "" {
+			out = append(out, a)
+		}
+	}
+	if len(out) == 0 {
+		return DefaultDiscoverArgs()
+	}
+	return out
+}
+
+// RunDiscover executes the project CLI's discover command and parses the output.
 // Returns nil capabilities (not an error) if the binary doesn't support discovery.
-func RunDiscover(binaryPath string) (*DiscoverResult, error) {
-	cmd := exec.Command(binaryPath, "rivet-discover")
+//
+// discoverArgs is the argv to pass, defaulting to DefaultDiscoverArgs when
+// empty. It is a list rather than a single token because a project CLI's
+// discover command isn't always one: `mix <ns>.rivet_discover` takes two.
+func RunDiscover(binaryPath string, discoverArgs ...string) (*DiscoverResult, error) {
+	cmd := exec.Command(binaryPath, NormalizeDiscoverArgs(discoverArgs)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -62,14 +89,41 @@ func RunDiscover(binaryPath string) (*DiscoverResult, error) {
 		return nil, nil
 	}
 
-	var result DiscoverResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		return nil, fmt.Errorf("parsing rivet-discover output: %w (got: %s)", err, stdout.String())
+	result, err := parseDiscoverOutput(stdout.Bytes())
+	if err != nil {
+		return nil, err
 	}
 
 	applyDefaults(result.Capabilities, os.Stderr)
 
-	return &result, nil
+	return result, nil
+}
+
+// parseDiscoverOutput decodes the discover envelope, tolerating a preamble.
+//
+// The protocol says stdout is JSON, and a CLI rivet built obeys it. A CLI run
+// through a build tool does not: Mix prints "Compiling 1 file (.ex)" to stdout,
+// not stderr, whenever the project is stale — which it always is the first time
+// you run discovery after editing the discover task. Failing there would mean
+// registration works on the second try and not the first.
+//
+// The retry starts at the first brace and keeps the original error if that
+// doesn't parse either, so genuinely malformed output still reports what it saw.
+func parseDiscoverOutput(out []byte) (*DiscoverResult, error) {
+	var result DiscoverResult
+	err := json.Unmarshal(out, &result)
+	if err == nil {
+		return &result, nil
+	}
+
+	if i := bytes.IndexByte(out, '{'); i > 0 {
+		var retry DiscoverResult
+		if json.Unmarshal(out[i:], &retry) == nil {
+			return &retry, nil
+		}
+	}
+
+	return nil, fmt.Errorf("parsing rivet-discover output: %w (got: %s)", err, out)
 }
 
 // applyDefaults back-fills the fields a project CLI may legitimately omit.

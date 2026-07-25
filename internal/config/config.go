@@ -75,7 +75,22 @@ func resolveToolGroup(override *bool, detected bool) bool {
 
 // ProjectCLIConfig describes the project-local CLI binary.
 type ProjectCLIConfig struct {
+	// Command is the executable rivet runs: a path in the repo
+	// ("./tools/projectcli/projectcli") or a command name on PATH ("mix").
+	// It stays a single string — every existing config spells it that way.
 	Command string `yaml:"command,omitempty"`
+
+	// Discover is the argv appended to Command to ask the CLI for its
+	// capabilities. Empty means the default single token "rivet-discover",
+	// which is what the Go scaffold registers as a hidden subcommand.
+	//
+	// It exists because not every CLI can host a top-level subcommand. The
+	// Elixir scaffold's discover task is a Mix task inside the project's
+	// namespace — `mix <ns>.rivet_discover` — so with `mix` as the command
+	// there is no top-level `rivet-discover` task to run, and discovery
+	// reported "no rivet-discover support" for every Elixir project. Two
+	// tokens, not one, is the whole difference.
+	Discover []string `yaml:"discover,omitempty"`
 }
 
 // PolicyDef is a policy rule as declared in config.yaml.
@@ -298,9 +313,17 @@ func StarterConfigYAML() []byte {
 #   vaulty: false
 
 # Project CLI — the repo-local CLI that exposes project-specific operations.
-# Uncomment and set the path to your project CLI binary.
+# Uncomment and set the path to your project CLI binary, or a command name on
+# PATH (e.g. "mix") for CLIs that are run through an interpreter.
+#
+# discover: how to ask that CLI for its capabilities. Defaults to the single
+# token ["rivet-discover"]. Set it when your discover command is spelled
+# differently — an Elixir Mix task lives in the project's namespace, so it
+# takes two tokens: "mix project.rivet_discover".
+# "rivet project register-cli <cmd> --discover <token>" writes this for you.
 # project_cli:
 #   command: "./bin/projectcli"
+#   discover: ["rivet-discover"]
 
 # Capabilities — project-specific tools that Rivet exposes to Claude Code via MCP.
 # Each capability has a name, kind, description, command, output format, and safety level.

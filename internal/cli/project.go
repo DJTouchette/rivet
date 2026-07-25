@@ -18,7 +18,6 @@ import (
 	"github.com/djtouchette/rivet/internal/vaulty"
 	"github.com/djtouchette/rivet/internal/witness"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 func newProjectCmd() *cobra.Command {
@@ -59,7 +58,8 @@ After scaffolding (Go):
   rivet project register-cli <dir>/<name>
 
 After scaffolding (Elixir):
-  Mix tasks are added directly to your project — run 'mix help' to see them.`,
+  Mix tasks are added directly to your project — run 'mix help' to see them.
+  rivet project register-cli mix --discover <name>.rivet_discover`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if _, err := os.Stat(".rivet"); os.IsNotExist(err) {
 				return fmt.Errorf(".rivet/ not found — run 'rivet init' first")
@@ -121,12 +121,21 @@ func initGoCLI(dir, name, modulePath string) error {
 		}
 	}
 
-	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Printf("  cd %s && go mod tidy && make build\n", dir)
-	fmt.Printf("  Edit %s to add params to your capabilities\n", manifestPath)
-	fmt.Println("  rivet sync")
+	printNextSteps(goNextSteps(dir, name, manifestPath))
 	return nil
+}
+
+// goNextSteps is what to do after scaffolding a Go CLI.
+//
+// Registration is the step that sets project_cli.command and fills the manifest
+// from the scaffolded rivet-discover command, so both scaffolds name it.
+func goNextSteps(dir, name, manifestPath string) []string {
+	return []string{
+		fmt.Sprintf("cd %s && go mod tidy && make build", dir),
+		fmt.Sprintf("rivet project register-cli ./%s", filepath.Join(dir, name)),
+		fmt.Sprintf("Edit %s to add params to your capabilities", manifestPath),
+		"rivet sync",
+	}
 }
 
 func initElixirCLI(name string) error {
@@ -163,12 +172,31 @@ func initElixirCLI(name string) error {
 		}
 	}
 
+	printNextSteps(elixirNextSteps(name, manifestPath))
+	return nil
+}
+
+// elixirNextSteps is what to do after scaffolding Mix tasks.
+//
+// The scaffolded discover task is namespaced — `mix <ns>.rivet_discover` — so
+// registration has to be told its spelling once, and records it in
+// project_cli.discover. Without that flag the task is unreachable and the
+// starter manifest is the only thing an Elixir project ever gets.
+func elixirNextSteps(name, manifestPath string) []string {
+	return []string{
+		fmt.Sprintf("mix %s.query.status --json   # test the scaffolded task", name),
+		fmt.Sprintf("rivet project register-cli mix --discover %s.rivet_discover", name),
+		fmt.Sprintf("Edit %s to add params to your capabilities", manifestPath),
+		"rivet sync",
+	}
+}
+
+func printNextSteps(steps []string) {
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Printf("  mix %s.query.status --json   # test the scaffolded task\n", name)
-	fmt.Printf("  Edit %s to add params to your capabilities\n", manifestPath)
-	fmt.Println("  rivet sync")
-	return nil
+	for _, s := range steps {
+		fmt.Printf("  %s\n", s)
+	}
 }
 
 // detectProjectLanguage uses simple file heuristics to determine the primary language.
@@ -197,40 +225,39 @@ func detectProjectLanguage() string {
 // --- register-cli ---
 
 func newProjectRegisterCLICmd() *cobra.Command {
-	var skipDiscover bool
+	var (
+		skipDiscover  bool
+		force         bool
+		discoverFlags []string
+	)
 
 	cmd := &cobra.Command{
-		Use:   "register-cli <path-to-binary>",
+		Use:   "register-cli <path-to-binary|command>",
 		Short: "Register a project CLI with Rivet",
-		Long: `Register an existing project CLI binary. If the binary supports the
-rivet-discover protocol, its capabilities are automatically added to config.yaml.
+		Long: `Register an existing project CLI. If it supports the rivet-discover
+protocol, its capabilities are merged into .rivet/capabilities.yaml.
 
-The rivet-discover protocol: the binary should have a hidden "rivet-discover"
-subcommand that outputs JSON with a "capabilities" array.`,
+The argument is a path in the repo ("./tools/projectcli/projectcli") or a command
+name on PATH ("mix") for a CLI that runs through an interpreter.
+
+The rivet-discover protocol: the CLI answers a discover command by printing JSON
+with a "capabilities" array. That command defaults to the single token
+"rivet-discover"; pass --discover (repeatable) when it is spelled differently —
+an Elixir Mix task lives in the project's namespace:
+
+  rivet project register-cli mix --discover project.rivet_discover
+
+The discover command is saved to project_cli.discover, so later runs need no flag.
+
+Re-running refreshes each discovered capability's description, command and output,
+and tightens its safety level, while leaving your typed params — and every comment
+in the file — alone. A discovered safety level that would RELAX one already in the
+manifest is reported and skipped unless --force is passed.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			binaryPath := args[0]
-
-			// Resolve to absolute path, then make relative to cwd if possible.
-			absPath, err := filepath.Abs(binaryPath)
+			target, err := projectcli.ResolveTarget(args[0])
 			if err != nil {
-				return fmt.Errorf("resolving path: %w", err)
-			}
-
-			// Check it exists.
-			info, err := os.Stat(absPath)
-			if err != nil {
-				return fmt.Errorf("binary not found: %s", binaryPath)
-			}
-			if info.IsDir() {
-				return fmt.Errorf("%s is a directory, not a binary", binaryPath)
-			}
-
-			// Use relative path for config if under cwd.
-			cwd, _ := os.Getwd()
-			configPath := absPath
-			if rel, err := filepath.Rel(cwd, absPath); err == nil && !strings.HasPrefix(rel, "..") {
-				configPath = "./" + rel
+				return err
 			}
 
 			cfg, err := config.LoadProject()
@@ -238,61 +265,65 @@ subcommand that outputs JSON with a "capabilities" array.`,
 				return err
 			}
 
-			cfg.ProjectCLI.Command = configPath
+			cfg.ProjectCLI.Command = target.Config
 			var actions []string
-			actions = append(actions, fmt.Sprintf("set project_cli.command = %s", configPath))
+			actions = append(actions, fmt.Sprintf("set project_cli.command = %s", target.Config))
 
-			// Try discovery → write capabilities manifest.
+			// An explicit --discover is recorded, so registering an Elixir CLI is a
+			// one-time flag rather than a thing to remember on every re-run.
+			discoverArgs := cfg.ProjectCLI.Discover
+			if len(discoverFlags) > 0 {
+				discoverArgs = discoverFlags
+				cfg.ProjectCLI.Discover = discoverFlags
+				actions = append(actions, fmt.Sprintf("set project_cli.discover = [%s]", strings.Join(discoverFlags, " ")))
+			}
+			discoverArgs = projectcli.NormalizeDiscoverArgs(discoverArgs)
+
 			var discovered *projectcli.DiscoverResult
 			if !skipDiscover {
-				discovered, err = projectcli.RunDiscover(absPath)
+				discovered, err = projectcli.RunDiscover(target.Exec, discoverArgs...)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "warning: discovery failed: %v\n", err)
 				}
 			}
 
 			manifestPath := capabilities.DefaultManifestPath()
+			var merge *projectcli.MergeResult
+			var notes []string
 			if discovered != nil && len(discovered.Capabilities) > 0 {
-				// Write or merge into capabilities manifest.
-				manifest := capabilities.LoadManifestOrNil(manifestPath)
-				if manifest == nil {
-					manifest = &capabilities.Manifest{}
-				}
-				manifest.CLI = configPath
-
-				existing := make(map[string]bool)
-				for _, c := range manifest.Capabilities {
-					existing[c.Name] = true
+				caps := make([]projectcli.DiscoveredCapability, len(discovered.Capabilities))
+				for i, dc := range discovered.Capabilities {
+					// The manifest holds subcommand args only: ToCapabilities prepends
+					// cli: to every command. Strip whichever spelling of the binary the
+					// CLI reported — os.Executable() resolves symlinks, the typed path
+					// and a PATH command name do not.
+					dc.Command = projectcli.StripBinaryPrefix(dc.Command, args[0], target.Exec, target.Config)
+					caps[i] = dc
 				}
 
-				var added int
-				for _, dc := range discovered.Capabilities {
-					if existing[dc.Name] {
-						continue
+				merge, err = projectcli.MergeManifest(manifestPath, target.Config, caps, force)
+				if err != nil {
+					return err
+				}
+				actions = append(actions, "merged discovered capabilities into "+manifestPath)
+			} else {
+				if !skipDiscover {
+					actions = append(actions, fmt.Sprintf("no rivet-discover support — `%s %s` reported nothing",
+						target.Config, strings.Join(discoverArgs, " ")))
+					notes = append(notes,
+						"If your discover command is spelled differently, pass --discover <token>",
+						"  e.g. rivet project register-cli mix --discover project.rivet_discover",
+						"Otherwise edit "+manifestPath+" by hand.")
+				}
+				// Discovery or not, the manifest's cli: has to follow the binary
+				// just registered, or config.yaml points at the new one while every
+				// capability keeps running the old.
+				if fileExists(manifestPath) {
+					if _, err := projectcli.MergeManifest(manifestPath, target.Config, nil, force); err != nil {
+						return err
 					}
-					// Strip the CLI binary from the command to store relative subcommands.
-					subCmd := dc.Command
-					if len(subCmd) > 0 && subCmd[0] == absPath {
-						subCmd = subCmd[1:]
-					}
-					manifest.Capabilities = append(manifest.Capabilities, capabilities.ManifestCap{
-						Name:        dc.Name,
-						Description: dc.Description,
-						Command:     subCmd,
-						Output:      dc.Output,
-						Safety:      dc.Safety,
-					})
-					added++
+					actions = append(actions, fmt.Sprintf("set cli = %s in %s", target.Config, manifestPath))
 				}
-
-				data, _ := yaml.Marshal(manifest)
-				if err := os.WriteFile(manifestPath, data, 0644); err != nil {
-					return fmt.Errorf("writing manifest: %w", err)
-				}
-				actions = append(actions, fmt.Sprintf("wrote %s (%d capabilities, %d new)",
-					manifestPath, len(manifest.Capabilities), added))
-			} else if !skipDiscover {
-				actions = append(actions, "no rivet-discover support — edit "+manifestPath+" manually")
 			}
 
 			if err := cfg.Write(); err != nil {
@@ -304,6 +335,16 @@ subcommand that outputs JSON with a "capabilities" array.`,
 				fmt.Printf("  + %s\n", a)
 			}
 
+			if merge != nil {
+				fmt.Println()
+				for _, line := range merge.Summary() {
+					fmt.Println(line)
+				}
+			}
+			for _, n := range notes {
+				fmt.Println(n)
+			}
+
 			fmt.Println()
 			fmt.Printf("Edit %s to add typed params to your capabilities.\n", manifestPath)
 			fmt.Println("Run 'rivet inspect capabilities' to see all registered capabilities.")
@@ -312,7 +353,11 @@ subcommand that outputs JSON with a "capabilities" array.`,
 		},
 	}
 
-	cmd.Flags().BoolVar(&skipDiscover, "skip-discover", false, "skip running rivet-discover")
+	cmd.Flags().BoolVar(&skipDiscover, "skip-discover", false, "skip running the discover command")
+	cmd.Flags().StringArrayVar(&discoverFlags, "discover", nil,
+		"discover command argv, repeat for multiple tokens (default: rivet-discover)")
+	cmd.Flags().BoolVar(&force, "force", false,
+		"let discovered safety levels overwrite the manifest's, even when that relaxes them")
 
 	return cmd
 }

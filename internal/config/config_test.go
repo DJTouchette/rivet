@@ -424,6 +424,117 @@ func TestLoadProjectIgnoresUserLevelConfig(t *testing.T) {
 	}
 }
 
+// project_cli grew a discover key so a project can spell its discover command
+// with more than one token (`mix <ns>.rivet_discover`). Every config in the wild
+// spells command as a plain string and has no discover key at all, so both of
+// those have to keep loading exactly as before.
+func TestProjectCLIDiscoverParsedFromYAML(t *testing.T) {
+	tests := []struct {
+		name         string
+		yaml         string
+		wantCommand  string
+		wantDiscover []string
+	}{
+		{
+			name:         "command alone still loads",
+			yaml:         "project_cli:\n  command: \"./bin/mycli\"\n",
+			wantCommand:  "./bin/mycli",
+			wantDiscover: nil,
+		},
+		{
+			name:         "discover is a list of argv tokens",
+			yaml:         "project_cli:\n  command: mix\n  discover: [\"project.rivet_discover\"]\n",
+			wantCommand:  "mix",
+			wantDiscover: []string{"project.rivet_discover"},
+		},
+		{
+			name:         "multiple tokens keep their order",
+			yaml:         "project_cli:\n  command: npm\n  discover:\n    - run\n    - rivet-discover\n",
+			wantCommand:  "npm",
+			wantDiscover: []string{"run", "rivet-discover"},
+		},
+		{
+			name:         "no project_cli section at all",
+			yaml:         "capabilities: []\n",
+			wantCommand:  "",
+			wantDiscover: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadFrom(writeTempConfig(t, tt.yaml))
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.ProjectCLI.Command != tt.wantCommand {
+				t.Errorf("command = %q, want %q", cfg.ProjectCLI.Command, tt.wantCommand)
+			}
+			if len(cfg.ProjectCLI.Discover) != len(tt.wantDiscover) {
+				t.Fatalf("discover = %v, want %v", cfg.ProjectCLI.Discover, tt.wantDiscover)
+			}
+			for i := range tt.wantDiscover {
+				if cfg.ProjectCLI.Discover[i] != tt.wantDiscover[i] {
+					t.Fatalf("discover = %v, want %v", cfg.ProjectCLI.Discover, tt.wantDiscover)
+				}
+			}
+		})
+	}
+}
+
+// Adding a field must not make Write start emitting it for projects that never
+// set it, and must not disturb the merge that keeps unmodelled sections and
+// comments alive.
+func TestWriteRoundTripsDiscover(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := "# keep me\nproject_cli:\n  command: ./old\nschema:\n  keep: me\n"
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// A registration that sets no discover command leaves the key absent.
+	cfg, err := LoadOrDefault(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.ProjectCLI.Command = "mix"
+	if err := cfg.Write(); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if strings.Contains(string(got), "discover") {
+		t.Errorf("unset discover was written out:\n%s", got)
+	}
+
+	// Setting it lands, and the rest of the file survives.
+	cfg, err = LoadOrDefault(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	cfg.ProjectCLI.Discover = []string{"project.rivet_discover"}
+	if err := cfg.Write(); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	reloaded, err := LoadOrDefault(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(reloaded.ProjectCLI.Discover) != 1 || reloaded.ProjectCLI.Discover[0] != "project.rivet_discover" {
+		t.Errorf("discover = %v, want [project.rivet_discover]", reloaded.ProjectCLI.Discover)
+	}
+	if reloaded.ProjectCLI.Command != "mix" {
+		t.Errorf("command = %q, want mix", reloaded.ProjectCLI.Command)
+	}
+	text, _ := os.ReadFile(path)
+	for _, want := range []string{"# keep me", "keep: me"} {
+		if !strings.Contains(string(text), want) {
+			t.Errorf("missing %q after Write:\n%s", want, text)
+		}
+	}
+}
+
 // When the project does have a config, LoadProject uses it.
 func TestLoadProjectUsesProjectConfigWhenPresent(t *testing.T) {
 	t.Chdir(t.TempDir())

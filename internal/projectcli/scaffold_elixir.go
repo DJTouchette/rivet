@@ -41,33 +41,14 @@ func ScaffoldElixir(dir, cliName string) (*ScaffoldResult, error) {
 	return result, nil
 }
 
-// DiscoverElixirCapabilities returns capability definitions that the
-// Elixir scaffold would register.
-func DiscoverElixirCapabilities(cliName string) []DiscoveredCapability {
-	return []DiscoveredCapability{
-		{
-			Name:        cliName + ".status",
-			Description: "Show project status summary",
-			Command:     []string{"mix", cliName + ".query.status", "--json"},
-			Output:      "json",
-			Safety:      "safe",
-		},
-		{
-			Name:        cliName + ".health",
-			Description: "Run health checks",
-			Command:     []string{"mix", cliName + ".check.health", "--json"},
-			Output:      "json",
-			Safety:      "safe",
-		},
-		{
-			Name:        cliName + ".seed",
-			Description: "Seed development data",
-			Command:     []string{"mix", cliName + ".task.seed", "--json"},
-			Output:      "json",
-			Safety:      "guarded",
-		},
-	}
-}
+// DiscoverElixirCapabilities used to live here, returning a hardcoded copy of
+// what the Elixir scaffold registers. It had no caller: nothing but its own test
+// ever read it. It is gone rather than wired in, because the real path now
+// exists — `rivet project register-cli mix --discover <ns>.rivet_discover` runs
+// the scaffolded Mix task and takes the capabilities from there — and a third
+// hardcoded copy of the same three capabilities (after the discover task
+// template and capabilities.StarterManifestElixir) is a place for safety levels
+// to drift out of agreement unnoticed.
 
 func scaffoldElixirFiles(cliName string) []scaffoldFile {
 	ns := cliName

@@ -387,7 +387,8 @@ func (d *driver) extensionInstalled(ctx context.Context, name string) bool {
 
 // parseIndexDef extracts the indexed column list and INCLUDE list from a
 // pg_get_indexdef string. Example input:
-//   CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id) INCLUDE (email)
+//
+//	CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id) INCLUDE (email)
 func parseIndexDef(def string) (cols []string, include []string) {
 	openIdx := strings.Index(def, "(")
 	if openIdx < 0 {

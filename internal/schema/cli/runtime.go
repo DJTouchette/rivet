@@ -96,12 +96,12 @@ func pullSnapshot(cat catalog.Catalog, dbCfg *config.Database, slowLimit int) (*
 
 	e := &cache.Entry{
 		Name: dbCfg.Name, Engine: dbCfg.Engine,
-		Host:       dbCfg.Host,
-		FetchedAt:  time.Now().UTC(),
-		Schema:     sch,
-		IndexUsage: usage,
-		Hints:      hints,
-		SlowQueries: slow,
+		Host:           dbCfg.Host,
+		FetchedAt:      time.Now().UTC(),
+		Schema:         sch,
+		IndexUsage:     usage,
+		Hints:          hints,
+		SlowQueries:    slow,
 		SlowQueryLimit: slowLimit,
 	}
 	return e, nil

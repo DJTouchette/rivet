@@ -7,8 +7,8 @@ func TestTableQualifiedName(t *testing.T) {
 		schema, name, want string
 	}{
 		{"", "users", "users"},
-		{"public", "users", "users"},   // default postgres schema omitted
-		{"dbo", "Orders", "Orders"},     // default mssql schema omitted
+		{"public", "users", "users"}, // default postgres schema omitted
+		{"dbo", "Orders", "Orders"},  // default mssql schema omitted
 		{"analytics", "events", "analytics.events"},
 	}
 	for _, c := range cases {

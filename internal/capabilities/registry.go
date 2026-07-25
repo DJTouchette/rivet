@@ -33,12 +33,12 @@ var (
 // Param describes a named parameter for a capability.
 type Param struct {
 	Name        string   `yaml:"name"        json:"name"`
-	Type        string   `yaml:"type"        json:"type"`                  // string, number, boolean, integer
+	Type        string   `yaml:"type"        json:"type"` // string, number, boolean, integer
 	Description string   `yaml:"description" json:"description,omitempty"`
 	Required    bool     `yaml:"required"    json:"required,omitempty"`
 	Default     string   `yaml:"default"     json:"default,omitempty"`
 	Enum        []string `yaml:"enum"        json:"enum,omitempty"`
-	Flag        string   `yaml:"flag"        json:"flag,omitempty"`        // CLI flag name (default: --<name>)
+	Flag        string   `yaml:"flag"        json:"flag,omitempty"` // CLI flag name (default: --<name>)
 }
 
 // FlagName returns the CLI flag to use for this param.

@@ -12,12 +12,12 @@ func init() { register(&nodeExtractor{}) }
 
 // nodeExtractor covers JavaScript and TypeScript codebases:
 //
-//   pool.query("SELECT ...", [args])           // node-postgres / mssql / mysql2
-//   pool.query(`SELECT ...`, [args])
-//   pool.execute("SELECT ...")
-//   await db.query(sql`SELECT ...`)           // tagged template — slonik, postgres.js
-//   knex.raw("SELECT ...")
-//   prismaClient.$queryRaw`SELECT ...`
+//	pool.query("SELECT ...", [args])           // node-postgres / mssql / mysql2
+//	pool.query(`SELECT ...`, [args])
+//	pool.execute("SELECT ...")
+//	await db.query(sql`SELECT ...`)           // tagged template — slonik, postgres.js
+//	knex.raw("SELECT ...")
+//	prismaClient.$queryRaw`SELECT ...`
 //
 // Tagged templates don't require the string to be the first arg (`sql`...`
 // is the expression). We look for those separately.
@@ -40,7 +40,7 @@ var nodeSQLMethods = []string{
 
 var reNodeCall = regexp.MustCompile(`(?:\.|\b)(` + strings.Join(nodeSQLMethods, "|") + `)\s*\(`)
 
-// Tagged templates: `sql\`SELECT ...\`` or `sql.raw\`SELECT ...\``
+// Tagged templates: `sql\`SELECT ...\“ or `sql.raw\`SELECT ...\“
 var reTagged = regexp.MustCompile("\\b(sql|query|prisma\\.\\$queryRaw|db\\.query|psql)\\s*(?:\\.raw)?\\s*`")
 
 var reJSVarAssign = regexp.MustCompile("(?m)^\\s*(?:const|let|var)\\s+(\\w+)\\s*=\\s*(`[^`]*`|\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')")

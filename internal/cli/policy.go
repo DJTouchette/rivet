@@ -127,4 +127,3 @@ func formatMatch(m *policy.Match) string {
 	}
 	return fmt.Sprintf("%v", parts)
 }
-

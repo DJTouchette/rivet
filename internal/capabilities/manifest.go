@@ -13,18 +13,18 @@ import (
 // with typed parameters. This is the primary way projects expose capabilities
 // to Claude Code via MCP.
 type Manifest struct {
-	CLI          string       `yaml:"cli"`
+	CLI          string        `yaml:"cli"`
 	Capabilities []ManifestCap `yaml:"capabilities"`
 }
 
 // ManifestCap is a capability as declared in capabilities.yaml.
 type ManifestCap struct {
-	Name        string  `yaml:"name"`
-	Description string  `yaml:"description"`
-	Command     []string `yaml:"command"`     // subcommand args (appended to cli binary)
-	Output      string  `yaml:"output"`       // json or text
-	Safety      string  `yaml:"safety"`       // safe, guarded, dangerous
-	Params      []Param `yaml:"params,omitempty"`
+	Name        string   `yaml:"name"`
+	Description string   `yaml:"description"`
+	Command     []string `yaml:"command"` // subcommand args (appended to cli binary)
+	Output      string   `yaml:"output"`  // json or text
+	Safety      string   `yaml:"safety"`  // safe, guarded, dangerous
+	Params      []Param  `yaml:"params,omitempty"`
 }
 
 // DefaultManifestPath returns the standard location for the manifest.

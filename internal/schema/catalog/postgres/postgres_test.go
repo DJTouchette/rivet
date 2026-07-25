@@ -9,9 +9,9 @@ import (
 
 func TestParseIndexDef(t *testing.T) {
 	cases := []struct {
-		def      string
-		cols     []string
-		include  []string
+		def     string
+		cols    []string
+		include []string
 	}{
 		{"CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)", []string{"id"}, nil},
 		{"CREATE INDEX idx ON t USING btree (tenant_id, created_at)", []string{"tenant_id", "created_at"}, nil},

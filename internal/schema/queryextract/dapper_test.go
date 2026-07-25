@@ -94,4 +94,3 @@ func TestDapper_GenericTypeParam(t *testing.T) {
 		t.Fatalf("refs: %d", len(refs))
 	}
 }
-

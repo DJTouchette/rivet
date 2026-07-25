@@ -1,10 +1,11 @@
 // Package schema is the rivet-side shim around the schema-intel subsystem.
 //
 // It exposes two entry points:
-//   NewCommand — the cobra tree, used by `rivet schema ...` and by MCP.
-//   Run        — an in-process runner that captures stdout/stderr into strings,
-//                matching internal/recon/recon.go. This is what the MCP
-//                executor calls for schema.* capabilities.
+//
+//	NewCommand — the cobra tree, used by `rivet schema ...` and by MCP.
+//	Run        — an in-process runner that captures stdout/stderr into strings,
+//	             matching internal/recon/recon.go. This is what the MCP
+//	             executor calls for schema.* capabilities.
 package schema
 
 import (

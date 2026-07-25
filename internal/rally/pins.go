@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	pinsPath    = ".rally/pins.json"
-	ticketsDir  = ".rally/tickets"
-	source      = "rally"
-	uriPrefix   = "rally://pinned/"
-	mimeType    = "text/markdown"
+	pinsPath   = ".rally/pins.json"
+	ticketsDir = ".rally/tickets"
+	source     = "rally"
+	uriPrefix  = "rally://pinned/"
+	mimeType   = "text/markdown"
 )
 
 // rallyPin matches the on-disk shape of an entry in .rally/pins.json.

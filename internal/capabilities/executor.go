@@ -28,14 +28,14 @@ type InProcessRunner func(args []string) (stdout, stderr string, exitCode int, e
 
 // Executor runs capabilities.
 type Executor struct {
-	registry    *Registry
+	registry      *Registry
 	inProcRunners map[string]InProcessRunner // keyed by Command[0] (e.g. "vaulty")
 }
 
 // NewExecutor creates an executor backed by a registry.
 func NewExecutor(reg *Registry) *Executor {
 	return &Executor{
-		registry:    reg,
+		registry:      reg,
 		inProcRunners: make(map[string]InProcessRunner),
 	}
 }

@@ -13,17 +13,17 @@ func init() { register(&dapperExtractor{}) }
 // dapperExtractor extracts SQL from C# source files that use Dapper.
 // Patterns it handles:
 //
-//   connection.Query<T>("SELECT …", …)
-//   connection.Execute("UPDATE …", …)
-//   connection.QueryAsync<T>("SELECT …", …)
-//   connection.QueryFirst/QueryFirstOrDefault/QuerySingle/QuerySingleOrDefault
-//   connection.ExecuteScalar<T>(…)
-//   var sql = "SELECT …";  connection.Query<T>(sql, …)
+//	connection.Query<T>("SELECT …", …)
+//	connection.Execute("UPDATE …", …)
+//	connection.QueryAsync<T>("SELECT …", …)
+//	connection.QueryFirst/QueryFirstOrDefault/QuerySingle/QuerySingleOrDefault
+//	connection.ExecuteScalar<T>(…)
+//	var sql = "SELECT …";  connection.Query<T>(sql, …)
 //
 // It recognises:
-//   * raw string literals: "..."
-//   * verbatim strings:    @"..."
-//   * raw string literals: """ ... """  (C# 11)
+//   - raw string literals: "..."
+//   - verbatim strings:    @"..."
+//   - raw string literals: """ ... """  (C# 11)
 //
 // And walks string concatenation with + across the same statement.
 type dapperExtractor struct{}

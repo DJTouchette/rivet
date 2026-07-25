@@ -15,14 +15,14 @@ import (
 
 // Entry is one persisted snapshot.
 type Entry struct {
-	Name       string            `json:"name"`
-	Engine     types.Engine      `json:"engine"`
-	Host       string            `json:"host,omitempty"`
-	FetchedAt  time.Time         `json:"fetched_at"`
-	Schema     *types.Schema     `json:"schema,omitempty"`
-	IndexUsage []types.IndexUsage `json:"index_usage,omitempty"`
-	Hints      []types.MissingIndexHint `json:"hints,omitempty"`
-	SlowQueries []types.SlowQuery `json:"slow_queries,omitempty"`
+	Name        string                   `json:"name"`
+	Engine      types.Engine             `json:"engine"`
+	Host        string                   `json:"host,omitempty"`
+	FetchedAt   time.Time                `json:"fetched_at"`
+	Schema      *types.Schema            `json:"schema,omitempty"`
+	IndexUsage  []types.IndexUsage       `json:"index_usage,omitempty"`
+	Hints       []types.MissingIndexHint `json:"hints,omitempty"`
+	SlowQueries []types.SlowQuery        `json:"slow_queries,omitempty"`
 
 	// SlowQueryLimit is the row cap SlowQueries was captured with. Stored so a
 	// later request for *more* rows than were ever fetched can tell the

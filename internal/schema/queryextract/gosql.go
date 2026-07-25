@@ -12,18 +12,18 @@ func init() { register(&goExtractor{}) }
 
 // goExtractor catches the common Go database idioms:
 //
-//   db.Query(`SELECT ...`)
-//   db.QueryContext(ctx, "SELECT ...")
-//   db.Exec("UPDATE ...")
-//   sqlx.Get(db, &out, `SELECT ...`)
-//   pgxpool.Query(ctx, `SELECT ...`)
-//   dbmap.Select(&out, `SELECT ...`)
+//	db.Query(`SELECT ...`)
+//	db.QueryContext(ctx, "SELECT ...")
+//	db.Exec("UPDATE ...")
+//	sqlx.Get(db, &out, `SELECT ...`)
+//	pgxpool.Query(ctx, `SELECT ...`)
+//	dbmap.Select(&out, `SELECT ...`)
 //
 // It's conservative on purpose — it only catches queries whose FIRST
 // string-ish argument is a literal that looks like SQL.
 type goExtractor struct{}
 
-func (goExtractor) Lang() string        { return "go" }
+func (goExtractor) Lang() string { return "go" }
 func (goExtractor) Match(path string) bool {
 	return filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go")
 }

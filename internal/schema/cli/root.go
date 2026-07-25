@@ -8,9 +8,9 @@ import (
 )
 
 var (
-	flagHuman   bool
-	flagDB      string
-	flagConfig  string
+	flagHuman    bool
+	flagDB       string
+	flagConfig   string
 	flagCacheDir string
 )
 

@@ -16,9 +16,9 @@ import (
 
 // Inputs bundles everything an analysis pass might look at.
 type Inputs struct {
-	Schema        *types.Schema
-	IndexUsage    []types.IndexUsage
-	EngineHints   []types.MissingIndexHint
+	Schema           *types.Schema
+	IndexUsage       []types.IndexUsage
+	EngineHints      []types.MissingIndexHint
 	ExtractedQueries []types.QueryRef
 }
 
@@ -235,7 +235,7 @@ func DetectMissing(schema *types.Schema, hints []types.MissingIndexHint, queries
 			if !ok {
 				existing = &types.MissingIndex{
 					Schema: t.Schema, Table: t.Name,
-					Columns: cols,
+					Columns:    cols,
 					Confidence: "medium",
 					Source:     "code-analysis",
 					Evidence:   []string{"predicate appears in application code without a covering index"},

@@ -11,15 +11,16 @@ import (
 func init() { register(&pyExtractor{}) }
 
 // pyExtractor catches:
-//   cursor.execute("SELECT ...", ...)
-//   conn.execute(sa.text("SELECT ..."))
-//   session.execute(text("SELECT ..."))
-//   await conn.fetch("SELECT ...")           # asyncpg
-//   engine.connect().execute("SELECT ...")
-//   sql = """SELECT ..."""  cursor.execute(sql, ...)
+//
+//	cursor.execute("SELECT ...", ...)
+//	conn.execute(sa.text("SELECT ..."))
+//	session.execute(text("SELECT ..."))
+//	await conn.fetch("SELECT ...")           # asyncpg
+//	engine.connect().execute("SELECT ...")
+//	sql = """SELECT ..."""  cursor.execute(sql, ...)
 type pyExtractor struct{}
 
-func (pyExtractor) Lang() string        { return "python" }
+func (pyExtractor) Lang() string           { return "python" }
 func (pyExtractor) Match(path string) bool { return filepath.Ext(path) == ".py" }
 
 var pySQLMethods = []string{

@@ -194,8 +194,9 @@ func matchPrefix(s, prefix string) bool {
 }
 
 // isCreateIndexStmt recognises the CREATE INDEX variants we parse:
-//   CREATE INDEX, CREATE UNIQUE INDEX, CREATE CLUSTERED INDEX,
-//   CREATE NONCLUSTERED INDEX, CREATE UNIQUE NONCLUSTERED INDEX, etc.
+//
+//	CREATE INDEX, CREATE UNIQUE INDEX, CREATE CLUSTERED INDEX,
+//	CREATE NONCLUSTERED INDEX, CREATE UNIQUE NONCLUSTERED INDEX, etc.
 func isCreateIndexStmt(upper string) bool {
 	if !strings.HasPrefix(upper, "CREATE ") {
 		return false
@@ -525,7 +526,8 @@ func stripIdent(s string) string {
 }
 
 // extractColList extracts "(col1, col2)" from things like
-//   "PRIMARY KEY (col1, col2)" or "UNIQUE (email)".
+//
+//	"PRIMARY KEY (col1, col2)" or "UNIQUE (email)".
 func extractColList(s string) []string {
 	open := strings.Index(s, "(")
 	if open < 0 {
@@ -702,8 +704,9 @@ func isIdentFirstChar(b byte) bool {
 }
 
 // parseInlineFK handles definitions like
-//   FOREIGN KEY (col) REFERENCES other.table (othercol) ON DELETE CASCADE
-//   CONSTRAINT name FOREIGN KEY (col) REFERENCES …
+//
+//	FOREIGN KEY (col) REFERENCES other.table (othercol) ON DELETE CASCADE
+//	CONSTRAINT name FOREIGN KEY (col) REFERENCES …
 func parseInlineFK(s, defaultSchema string) (types.ForeignKey, bool) {
 	up := strings.ToUpper(s)
 	fkIdx := strings.Index(up, "FOREIGN KEY")
@@ -726,9 +729,9 @@ func parseInlineFK(s, defaultSchema string) (types.ForeignKey, bool) {
 	}
 
 	fk := types.ForeignKey{
-		Columns:          cols,
-		ReferencedSchema: refSchema,
-		ReferencedTable:  refTable,
+		Columns:           cols,
+		ReferencedSchema:  refSchema,
+		ReferencedTable:   refTable,
 		ReferencedColumns: refCols,
 	}
 

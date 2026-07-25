@@ -97,8 +97,8 @@ func scaffold() ([]scaffoldDoc, error) {
 	}
 
 	var overview struct {
-		Root       string `json:"root"`
-		Languages  []struct {
+		Root      string `json:"root"`
+		Languages []struct {
 			Name       string   `json:"name"`
 			FileCount  int      `json:"file_count"`
 			Extensions []string `json:"extensions"`
@@ -164,9 +164,9 @@ func scaffold() ([]scaffoldDoc, error) {
 }
 
 type domainInfo struct {
-	name     string
-	dirPath  string
-	files    int
+	name    string
+	dirPath string
+	files   int
 }
 
 // discoverDomains scans the filesystem for domain-level directories.

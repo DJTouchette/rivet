@@ -182,3 +182,95 @@ func TestBodyMatchFindsInflectedForms(t *testing.T) {
 		t.Errorf("unrelated token scored %.3f", got)
 	}
 }
+
+// Coverage used to count every token alike, so a broad doc sharing three
+// ubiquitous words beat a specific doc sharing the one rare word that actually
+// identified the subject. IDF is measured over the live corpus, so the weights
+// describe this project's vocabulary rather than English in general.
+func TestTokenIDFRewardsRareTokens(t *testing.T) {
+	docs := []*Document{
+		{Name: "a", Body: "billing billing billing"},
+		{Name: "b", Body: "billing and orders"},
+		{Name: "c", Body: "billing and analyzer"},
+	}
+
+	idf := tokenIDF(docs, []string{"billing", "analyzer"})
+
+	// "billing" is in every doc; "analyzer" in one.
+	if idf["analyzer"] <= idf["billing"] {
+		t.Errorf("rare token should weigh more: analyzer=%.4f billing=%.4f", idf["analyzer"], idf["billing"])
+	}
+	// A token in every document carries essentially no information.
+	if idf["billing"] < 0 {
+		t.Errorf("idf should never go negative, got %.4f", idf["billing"])
+	}
+}
+
+func TestTokenIDFEmptyInputs(t *testing.T) {
+	if got := tokenIDF(nil, []string{"x"}); got != nil {
+		t.Errorf("no docs should yield no weights, got %v", got)
+	}
+	if got := tokenIDF([]*Document{{Body: "x"}}, nil); got != nil {
+		t.Errorf("no tokens should yield no weights, got %v", got)
+	}
+}
+
+// A nil idf must reduce every weighted signal exactly to its unweighted form,
+// so callers without a corpus (RecommendLearnings) are unaffected.
+func TestWeightedSignalsMatchUnweightedWhenIDFIsNil(t *testing.T) {
+	tokens := []string{"retry", "backoff"}
+
+	body, _ := scoreBodyMatch("retry with backoff", tokens)
+	bodyW, _ := scoreBodyMatchWeighted("retry with backoff", tokens, nil)
+	if math.Abs(body-bodyW) > 1e-9 {
+		t.Errorf("body: %.6f vs %.6f", body, bodyW)
+	}
+
+	tag, _ := scoreTagMatch([]string{"retry"}, tokens)
+	tagW, _ := scoreTagMatchWeighted([]string{"retry"}, tokens, nil)
+	if math.Abs(tag-tagW) > 1e-9 {
+		t.Errorf("tag: %.6f vs %.6f", tag, tagW)
+	}
+
+	name, _ := scoreNameMatch("payment-retry", "Payment Retry", tokens)
+	nameW, _ := scoreNameMatchWeighted("payment-retry", "Payment Retry", tokens, nil)
+	if math.Abs(name-nameW) > 1e-9 {
+		t.Errorf("name: %.6f vs %.6f", name, nameW)
+	}
+}
+
+// The end-to-end effect: a specific doc owning the rare token must beat a broad
+// doc that only shares the common one.
+func TestRecommendPrefersDocOwningTheRareToken(t *testing.T) {
+	docs := []*Document{
+		{Name: "search", Kind: KindDomain, Title: "Product Search Domain",
+			Tags: []string{"search", "catalog"},
+			Body: "Ranks catalogue products. Does not own the index build."},
+		{Name: "search-indexer", Kind: KindModule, Title: "Search Index Pipeline",
+			Tags: []string{"search", "reindex"},
+			Body: "Reindex the catalogue with a blue/green alias flip."},
+		// Filler so "catalogue" is common across the corpus while "reindex"
+		// stays rare — IDF is relative, so it needs a corpus to be relative to.
+		{Name: "cache", Kind: KindModule, Tags: []string{"cache"},
+			Body: "Catalogue writes are rare so staleness is cheap."},
+		{Name: "orders", Kind: KindDomain, Tags: []string{"orders"},
+			Body: "Checkout over the catalogue."},
+	}
+
+	got := Recommend(docs, "reindex the catalogue", 5)
+	if len(got) == 0 {
+		t.Fatal("expected results")
+	}
+	if got[0].Name != "search-indexer" {
+		t.Errorf("rare-token owner should lead, got %q (%.3f); full ranking: %v",
+			got[0].Name, got[0].Score, rankNames(got))
+	}
+}
+
+func rankNames(recs []Recommendation) []string {
+	names := make([]string, 0, len(recs))
+	for _, r := range recs {
+		names = append(names, r.Name)
+	}
+	return names
+}

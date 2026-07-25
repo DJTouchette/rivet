@@ -69,6 +69,12 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 	tokens := tokenize(query)
 	isPath := looksLikePath(query)
 
+	// How rare each token is across the corpus. A token appearing in one
+	// document tells you far more than one appearing in all of them, and
+	// weighting coverage by that is what gives a specific doc a route to outrank
+	// a broad one that merely shares the common words.
+	idf := tokenIDF(docs, tokens)
+
 	// Embed the query once; if the scorer can't prepare, drop to lexical-only.
 	semOK := o.sem != nil && o.sem.Prepare(query)
 
@@ -79,7 +85,7 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 		var signals []string
 
 		// Signal 1: Tag match (highest weight for exact tag hits)
-		tagScore, tagSignal := scoreTagMatch(doc.Tags, tokens)
+		tagScore, tagSignal := scoreTagMatchWeighted(doc.Tags, tokens, idf)
 		if tagScore > 0 {
 			score += tagScore
 			signals = append(signals, tagSignal)
@@ -95,14 +101,14 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 		}
 
 		// Signal 3: Name/title match
-		nameScore, nameSignal := scoreNameMatch(doc.Name, doc.Title, tokens)
+		nameScore, nameSignal := scoreNameMatchWeighted(doc.Name, doc.Title, tokens, idf)
 		if nameScore > 0 {
 			score += nameScore
 			signals = append(signals, nameSignal)
 		}
 
 		// Signal 4: Body keyword match
-		bodyScore, bodySignal := scoreBodyMatch(doc.Body, tokens)
+		bodyScore, bodySignal := scoreBodyMatchWeighted(doc.Body, tokens, idf)
 		if bodyScore > 0 {
 			score += bodyScore
 			signals = append(signals, bodySignal)
@@ -253,8 +259,29 @@ func looksLikePath(query string) bool {
 	return strings.Contains(query, "/") || strings.Contains(query, ".")
 }
 
-// scoreTagMatch checks how many query tokens match document tags.
+// tokenWeight returns a token's rarity weight, or 1 when no corpus measurement
+// is available. Keeping this in one place is what makes a nil idf reduce every
+// weighted signal exactly to its unweighted form.
+func tokenWeight(idf map[string]float64, tok string) float64 {
+	if idf == nil {
+		return 1
+	}
+	if w, ok := idf[tok]; ok {
+		return w
+	}
+	return 1
+}
+
+// scoreTagMatch checks how many query tokens match document tags, weighting
+// every token equally.
 func scoreTagMatch(tags []string, tokens []string) (float64, string) {
+	return scoreTagMatchWeighted(tags, tokens, nil)
+}
+
+// scoreTagMatchWeighted scores tag coverage weighted by token rarity, so a tag
+// hit on a word unique to one document counts for more than a hit on a word half
+// the corpus is tagged with.
+func scoreTagMatchWeighted(tags []string, tokens []string, idf map[string]float64) (float64, string) {
 	if len(tags) == 0 || len(tokens) == 0 {
 		return 0, ""
 	}
@@ -263,9 +290,11 @@ func scoreTagMatch(tags []string, tokens []string) (float64, string) {
 	// exactly "index" outranks one tagged "indexing-pipeline" for that token.
 	const partialCredit = 0.6
 
-	credit := 0.0
+	var credit, totalWeight float64
 	exact := 0
 	for _, tok := range tokens {
+		tokWeight := tokenWeight(idf, tok)
+		totalWeight += tokWeight
 		// Both sides are stemmed before comparison. Comparing raw forms in one
 		// direction was asymmetric, and comparing them in both directions does
 		// not actually help: "cache" is not a substring of "caching" either way
@@ -287,16 +316,16 @@ func scoreTagMatch(tags []string, tokens []string) (float64, string) {
 		if best == 1.0 {
 			exact++
 		}
-		credit += best
+		credit += best * tokWeight
 	}
 
-	if credit == 0 {
+	if credit == 0 || totalWeight == 0 {
 		return 0, ""
 	}
 
-	// Score on the share of the query the tags account for, weighted by how
-	// exactly they account for it.
-	coverage := credit / float64(len(tokens))
+	// Score on the share of the query the tags account for — weighted by how
+	// exactly they account for it, and by how much each token discriminated.
+	coverage := credit / totalWeight
 	weight := 0.5 * coverage
 	if exact == len(tokens) {
 		weight = 0.6 // every token landed on a tag exactly
@@ -407,24 +436,37 @@ func matchDoubleGlob(pattern, path string) bool {
 	return true
 }
 
-// scoreNameMatch checks if query tokens match the document name or title.
+// scoreNameMatch checks if query tokens match the document name or title,
+// weighting every token equally.
 func scoreNameMatch(name, title string, tokens []string) (float64, string) {
+	return scoreNameMatchWeighted(name, title, tokens, nil)
+}
+
+// scoreNameMatchWeighted scores name/title coverage weighted by token rarity.
+// This is the signal that most needed it: a broad doc titled "Product Search
+// Domain" collected a name match for the ubiquitous word "product" and rode it
+// past the specific doc that owned the rare word in the same query.
+func scoreNameMatchWeighted(name, title string, tokens []string, idf map[string]float64) (float64, string) {
 	nameLower := strings.ToLower(name)
 	titleLower := strings.ToLower(title)
 
+	var matchedWeight, totalWeight float64
 	matches := 0
 	for _, tok := range tokens {
+		totalWeight += tokenWeight(idf, tok)
+
 		probe := stemProbe(tok)
 		if strings.Contains(nameLower, probe) || strings.Contains(titleLower, probe) {
 			matches++
+			matchedWeight += tokenWeight(idf, tok)
 		}
 	}
 
-	if matches == 0 {
+	if matches == 0 || totalWeight == 0 {
 		return 0, ""
 	}
 
-	coverage := float64(matches) / float64(len(tokens))
+	coverage := matchedWeight / totalWeight
 	weight := 0.4 * coverage
 	if matches == len(tokens) {
 		weight = 0.5
@@ -536,25 +578,84 @@ func RecommendLearnings(entries []*LearningEntry, query string, maxResults int) 
 	return results
 }
 
-// scoreBodyMatch checks if query tokens appear in the document body.
+// tokenIDF returns an inverse-document-frequency weight per token, measured over
+// the bodies actually being searched. A token in every document scores near 0; a
+// token in one scores highest.
+//
+// Measuring against the live corpus rather than a fixed table means the weights
+// describe *this* project's vocabulary: "billing" is uninformative in a billing
+// system and highly informative in a search engine.
+func tokenIDF(docs []*Document, tokens []string) map[string]float64 {
+	if len(docs) == 0 || len(tokens) == 0 {
+		return nil
+	}
+
+	bodies := make([]string, 0, len(docs))
+	for _, d := range docs {
+		bodies = append(bodies, strings.ToLower(d.Body))
+	}
+
+	idf := make(map[string]float64, len(tokens))
+	n := float64(len(docs))
+	for _, tok := range tokens {
+		probe := stemProbe(tok)
+		df := 0
+		for _, body := range bodies {
+			if strings.Contains(body, probe) {
+				df++
+			}
+		}
+		// Smoothed so a token matching nothing still has a defined weight, and
+		// one matching everything lands at log(1) = 0 rather than negative.
+		idf[tok] = math.Log(1 + n/float64(1+df))
+	}
+	return idf
+}
+
+// scoreBodyMatch checks if query tokens appear in the document body, weighting
+// every token equally. Used where there is no corpus to measure rarity against.
 func scoreBodyMatch(body string, tokens []string) (float64, string) {
+	return scoreBodyMatchWeighted(body, tokens, nil)
+}
+
+// scoreBodyMatchWeighted scores body coverage weighted by token rarity.
+//
+// Plain coverage (matched/total) treated every token alike, so a broad doc
+// sharing three common words beat a specific doc sharing the one word that
+// actually identified the subject. Weighting by IDF fixes that generally,
+// rather than by asserting that some document kinds are more specific than
+// others — which the tiers already say, and say wrongly for this purpose.
+//
+// A nil idf reduces exactly to the unweighted behaviour.
+func scoreBodyMatchWeighted(body string, tokens []string, idf map[string]float64) (float64, string) {
 	if body == "" || len(tokens) == 0 {
 		return 0, ""
 	}
 
 	bodyLower := strings.ToLower(body)
+
+	var matchedWeight, totalWeight float64
 	matches := 0
 	for _, tok := range tokens {
+		w := 1.0
+		if idf != nil {
+			if v, ok := idf[tok]; ok {
+				w = v
+			}
+		}
+		totalWeight += w
+
 		if strings.Contains(bodyLower, stemProbe(tok)) {
 			matches++
+			matchedWeight += w
 		}
 	}
 
-	if matches == 0 {
+	if matches == 0 || totalWeight == 0 {
 		return 0, ""
 	}
 
-	coverage := float64(matches) / float64(len(tokens))
+	coverage := matchedWeight / totalWeight
 	weight := 0.2 * coverage
 	if matches == len(tokens) {
 		weight = 0.3 // all tokens found in body

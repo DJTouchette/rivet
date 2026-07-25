@@ -202,6 +202,58 @@ var goldenQueries = []goldenQuery{
 		want:  []string{"deploy-pipeline"},
 		why:   "a non-source path; the only doc claiming .github/workflows/**.",
 	},
+
+	// --- harder set ----------------------------------------------------------
+	// recall@3 and @5 hit 1.000 on the queries above, which left the harness no
+	// headroom to detect an improvement or a subtle regression. These are chosen
+	// to be genuinely difficult: distinctive vocabulary buried mid-body, symptom
+	// phrasing that shares almost nothing with the doc, and pairs where the
+	// broad doc and the specific doc both look plausible.
+	{
+		query: "blue green index swap",
+		want:  []string{"search-indexer"},
+		why:   "the alias flip is described only in the indexer; the search domain explicitly disclaims owning the index build. Distinctive vocabulary, none of it in tags.",
+	},
+	{
+		query: "a cold key is hammering the database",
+		want:  []string{"cache-layer"},
+		why:   "single-flight/stampede protection. The doc says 'stampede', the query says 'hammering' — near-zero literal overlap, so this leans on body matching finding 'cold key'.",
+	},
+	{
+		query: "SCAN over a hot keyspace",
+		want:  []string{"cache-layer"},
+		why:   "a specific operational warning that appears mid-body with no tag support.",
+	},
+	{
+		query: "my retry keeps replaying the first attempt response",
+		want:  []string{"idempotency-keys"},
+		why:   "the retry-as-replay failure is idempotency's, not the retry scheduler's, though payment-retry shares the retry and idempotency tags. Probes whether a paradigm can outrank a module on body evidence.",
+	},
+	{
+		query: "double entry journal posting",
+		want:  []string{"legacy-ledger"},
+		why:   "distinctive vocabulary owned by exactly one doc. A floor check: if this ever misses, something is badly wrong.",
+	},
+	{
+		query: "why did checkout go down",
+		want:  []string{"postmortems/2025-11-checkout-outage"},
+		why:   "second legitimate-wiki case, in a nested directory, phrased as a question with no shared vocabulary beyond 'checkout'.",
+	},
+	{
+		query: "webhook deliveries keep getting retried",
+		want:  []string{"webhook-dispatcher"},
+		why:   "'retry' is a tag on four docs. The distinguishing token is 'webhook', so this checks that one precise tag beats three docs sharing the generic one.",
+	},
+	{
+		query: "an analyzer change altered ranking",
+		want:  []string{"search-indexer"},
+		why:   "mapping/analyzer changes belong to the indexer even though the observable effect is relevance, which is the search domain's subject. Deliberately cross-cutting.",
+	},
+	{
+		query: "lease renewal stopped and jobs got picked up twice",
+		want:  []string{"internal/jobs/worker.go", "job-queue"},
+		why:   "symptom phrasing that should reach a code-extracted doc; tests that the code tier is reachable by prose, not only by path.",
+	},
 }
 
 // --- baseline (the ratchet) --------------------------------------------------
@@ -230,30 +282,57 @@ var goldenQueries = []goldenQuery{
 //     are now trimmed to a substring probe before matching body and name text.
 //     Single-character tokens are also dropped: the "I" in "how do I…" body-
 //     matched nearly every document and diluted real coverage ratios.
-//  4. OPEN — "reindex the product catalogue" still puts the broad `search`
-//     domain above the specific `search-indexer` module (rank 2). Exact tag
-//     hits now outweigh substring brushes, which was not enough on its own:
-//     here the broad doc wins on a title match, and nothing in the model says a
-//     module is more specific than a domain. Left deliberately — inverting that
-//     generally is a semantic claim the corpus does not justify.
+//  4. FIXED (mostly) — a broad doc outranked the specific one because coverage
+//     counted every token alike, so three ubiquitous words beat the one rare
+//     word that actually identified the subject. Tag, name and body coverage
+//     are now weighted by inverse document frequency measured over the live
+//     corpus (see tokenIDF). That is a general fix; the alternative — asserting
+//     that modules are more specific than domains — is a semantic claim the
+//     corpus does not support, and would break the queries where the domain is
+//     genuinely right.
 //
-// Post-fix measurement, same corpus and goldens:
+// Post-fix measurement on those same 27 goldens:
 //
 //	recall@1 = 0.926 (25/27)   recall@3 = 1.000 (27/27)
 //	recall@5 = 1.000 (27/27)   MRR      = 0.957
 //
-// The thresholds below are set AT the post-fix values, deliberately, so the
-// test passes today and can only fail on a regression. They are a floor, not
-// a goal. Raise them when a change moves them up.
+// HARDER SET — recall@3 and @5 hit ceiling there, leaving no headroom to detect
+// either an improvement or a subtle regression, so nine harder goldens were
+// added (36 total): distinctive vocabulary buried mid-body, symptom phrasing
+// sharing almost nothing with the target, and broad/specific pairs in both
+// directions. Note that CHANGING THE GOLDEN SET RESETS COMPARABILITY — metrics
+// are only comparable against a fixed corpus and a fixed golden set, so the
+// numbers below cannot be read against the ones above.
 //
-// recall@3 and @5 are now at ceiling, so the instrument's remaining
-// discriminating power is at @1 and MRR. If tuning saturates those too, add
-// harder goldens rather than declaring victory.
+// Current measurement — 36 goldens, 21-doc corpus, with IDF weighting:
+//
+//	recall@1 = 0.917 (33/36)   recall@3 = 1.000 (36/36)
+//	recall@5 = 1.000 (36/36)   MRR      = 0.958
+//
+// The thresholds below are set AT those values, deliberately, so the test
+// passes today and can only fail on a regression. They are a floor, not a goal.
+// Raise them when a change moves them up.
+//
+// Three goldens still miss at rank 1, all landing at rank 2:
+//
+//   - "reindex the product catalogue" and "an analyzer change altered ranking"
+//     both put `search` above `search-indexer`. The domain holds a tag matching
+//     a query token that the module doesn't tag, and a tag is worth 0.5 against
+//     body's 0.2, so body evidence cannot close the gap however rare its tokens
+//     are. Fixing it means either inflating the noisiest signal or hard-coding
+//     kind specificity. Both labels are also genuinely contestable — the search
+//     domain really does own ranking. Left alone rather than overfitted to.
+//   - "the same charge is declined instantly on every repeat" has almost no
+//     literal overlap with its target. This is the query class the semantic
+//     signal exists for, and it marks how far pure lexical matching reaches.
+//
+// recall@3 and @5 are at ceiling again. The discriminating power is at @1 and
+// MRR; if those saturate, add harder goldens rather than declaring victory.
 const (
-	baselineRecallAt1 = 0.926
+	baselineRecallAt1 = 0.917
 	baselineRecallAt3 = 1.000
 	baselineRecallAt5 = 1.000
-	baselineMRR       = 0.957
+	baselineMRR       = 0.958
 
 	// evalEpsilon absorbs float64 formatting noise when comparing a freshly
 	// computed metric against a constant literal rounded to three places.

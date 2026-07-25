@@ -59,9 +59,27 @@ func Lint(docs []*Document, projectRoot string) LintResult {
 		names[doc.Name]++
 	}
 
+	// Untagged themes need corpus-wide term frequencies to tell a distinctive
+	// subject from a word everyone uses.
+	docFreq := bodyTermDocFreq(docs)
+
 	reportedDuplicate := make(map[string]bool)
 	for _, doc := range docs {
 		result.Warnings = append(result.Warnings, lintDoc(doc, projectRoot, names)...)
+
+		// Rule: untagged-theme — a subject the body dwells on that the tags
+		// never mention, so retrieval can't find the doc by it.
+		for _, theme := range untaggedThemes(doc, docFreq, len(docs)) {
+			result.Warnings = append(result.Warnings, LintWarning{
+				Document: doc.Name,
+				Kind:     doc.Kind,
+				Path:     doc.Path,
+				Severity: SeverityWarning,
+				Rule:     "untagged-theme",
+				Message: fmt.Sprintf("body mentions %q %d times but no tag covers it — add it to tags, or retrieval won't find this doc by that term",
+					theme.term, theme.count),
+			})
+		}
 
 		// A duplicate is one problem, not one per copy, so it's reported once
 		// against the first doc carrying the name.

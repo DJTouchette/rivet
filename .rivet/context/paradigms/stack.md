@@ -1,5 +1,5 @@
 ---
-tags: [go, github.com/data-dog/go-sqlmock, github.com/djtouchette/recon, github.com/djtouchette/vaulty, github.com/djtouchette/witness, github.com/jackc/pgx/v5, github.com/microsoft/go-mssqldb, github.com/spf13/cobra, github.com/yalue/onnxruntime_go, gopkg.in/yaml.v3]
+tags: [go, stack, dependencies, modules, cgo, tree-sitter, build, tests, toolchain]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

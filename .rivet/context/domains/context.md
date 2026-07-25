@@ -1,5 +1,5 @@
 ---
-tags: [context, retrieval, recommend, learnings, wiki, runbooks, embeddings]
+tags: [context, retrieval, recommend, learnings, wiki, runbooks, embeddings, curated, weighting, scoring]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

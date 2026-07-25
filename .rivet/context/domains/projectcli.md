@@ -1,5 +1,5 @@
 ---
-tags: [projectcli]
+tags: [projectcli, discover, scaffold, elixir, manifest, capabilities, registration, safety, subcommand]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

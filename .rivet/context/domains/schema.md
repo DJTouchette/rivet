@@ -1,5 +1,5 @@
 ---
-tags: [schema]
+tags: [schema, database, snapshot, catalog, migrations, postgres, mssql, indexes, queries, staleness, drivers, roots, ordering]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

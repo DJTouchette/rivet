@@ -311,6 +311,8 @@ Every document:
   broken-wikilink       — [[link]] naming no known document
   self-wikilink         — [[link]] pointing at its own document
   duplicate-name        — two documents share a name (error)
+  untagged-theme        — a subject the body dwells on that no tag covers,
+                          so retrieval can't find the doc by it
 
 Wiki docs are free-form and often imported, so only the universal rules apply.
 Code-extracted docs are exempt from frontmatter rules — a rivet:context comment

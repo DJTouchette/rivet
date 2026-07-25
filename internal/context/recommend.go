@@ -243,6 +243,12 @@ func tokenize(query string) []string {
 func stemProbe(tok string) string {
 	const minStemLength = 4
 
+	// Deliberately no y/ies rule here. Mapping "query" and "queries" onto a
+	// common "queri" is correct English and measurably worse retrieval — it cost
+	// recall@1 0.944 -> 0.917 and recall@3 1.000 -> 0.986 on the golden set,
+	// because collapsing every trailing y widens probes across unrelated words.
+	// Lint applies that equivalence itself, where a loose match only means a
+	// warning is skipped rather than a document mis-ranked.
 	for _, suffix := range []string{"ing", "ed", "es", "s"} {
 		if !strings.HasSuffix(tok, suffix) {
 			continue

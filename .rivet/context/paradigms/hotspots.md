@@ -1,5 +1,5 @@
 ---
-tags: [risk, refactoring, hotspots, dependencies]
+tags: [risk, refactoring, hotspots, dependencies, imports, fan-in, churn]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

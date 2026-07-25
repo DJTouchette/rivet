@@ -1,5 +1,5 @@
 ---
-tags: [recon, witness, vaulty, rally, embedding, composition, capabilities]
+tags: [recon, witness, vaulty, rally, embedding, composition, capabilities, adapters, cache]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

@@ -95,7 +95,9 @@ Retries are owned by the scheduler — see [[payment-retry]] before changing thi
 
 ### Keeping Docs Honest
 
-`rivet context lint` is the thing that stops a context doc from quietly becoming a lie. It checks curated docs for missing tags, paths, owner and review date; runbooks for triggers, owner and a `last_tested` that isn't ancient; and every doc for placeholder sections left unfilled, backtick-quoted paths that no longer exist, broken `[[links]]`, and two docs sharing a name (which makes lookup ambiguous). Wiki docs are free-form and often imported, so only the universal rules apply. Code-extracted docs are exempt from frontmatter rules — a `rivet:context` comment has nowhere to put an owner.
+`rivet context lint` is the thing that stops a context doc from quietly becoming a lie. It checks curated docs for missing tags, paths, owner and review date; runbooks for triggers, owner and a `last_tested` that isn't ancient; and every doc for placeholder sections left unfilled, backtick-quoted paths that no longer exist, broken `[[links]]`, and two docs sharing a name (which makes lookup ambiguous).
+
+It also flags **untagged themes** — a subject the body dwells on that no tag covers. Tags are how retrieval learns what a doc is about, and they're the part nobody re-reads: prose gets rewritten, frontmatter gets written once. A doc drifts until it's genuinely about something its tags never mention, and then it simply stops being findable by that thing. Running this on rivet's own docs turned up a schema doc that said "snapshot" thirteen times and never tagged it. Wiki docs are free-form and often imported, so only the universal rules apply. Code-extracted docs are exempt from frontmatter rules — a `rivet:context` comment has nowhere to put an owner.
 
 It exits non-zero on errors, or on anything at all with `--strict`, so it belongs in CI:
 

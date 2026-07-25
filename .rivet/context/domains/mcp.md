@@ -1,5 +1,5 @@
 ---
-tags: [mcp, nudging, tools, resources, jsonrpc]
+tags: [mcp, nudging, tools, resources, jsonrpc, claude]
 owner: djtouchette
 last_reviewed: 2026-07-24
 related_paths:

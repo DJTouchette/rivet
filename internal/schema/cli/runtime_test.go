@@ -26,6 +26,11 @@ type fakeCatalog struct {
 	slowRows  int  // how many slow queries the server would return
 	gotLimit  int  // the limit the runtime actually asked for
 	dialCount *int // shared counter so tests can assert "never dialled"
+
+	// hintsErr and slowErr stand in for the two optional catalog sections
+	// failing: a missing extension, a denied permission, a broken stats view.
+	hintsErr error
+	slowErr  error
 }
 
 func (f *fakeCatalog) Engine() types.Engine { return types.EnginePostgres }
@@ -37,10 +42,16 @@ func (f *fakeCatalog) LoadSchema(ctx context.Context) (*types.Schema, error) {
 func (f *fakeCatalog) IndexUsage(ctx context.Context) ([]types.IndexUsage, error) { return nil, nil }
 
 func (f *fakeCatalog) MissingIndexHints(ctx context.Context) ([]types.MissingIndexHint, error) {
+	if f.hintsErr != nil {
+		return nil, f.hintsErr
+	}
 	return nil, nil
 }
 
 func (f *fakeCatalog) SlowQueries(ctx context.Context, limit int) ([]types.SlowQuery, error) {
+	if f.slowErr != nil {
+		return nil, f.slowErr
+	}
 	f.gotLimit = limit
 	n := f.slowRows
 	if n > limit {
@@ -547,6 +558,226 @@ func TestOverviewFlagsStaleSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(ov.Databases[0].Error, "stale") {
 		t.Errorf("stale snapshot has no explanation: %q", ov.Databases[0].Error)
+	}
+}
+
+// Bug 1: pullSnapshot discarded errors from MissingIndexHints and SlowQueries
+// and stored nil, so a snapshot that had never managed to read those sections
+// was indistinguishable from one where the server genuinely had nothing.
+func TestPullSnapshot_RecordsCatalogGaps(t *testing.T) {
+	notInstalled := fmt.Errorf("pg_qualstats extension not installed: %w", catalog.ErrNotSupported)
+	denied := errors.New("permission denied for view pg_stat_statements")
+
+	cases := []struct {
+		name     string
+		hintsErr error
+		slowErr  error
+		// wantGaps maps feature -> expected Kind. Absent feature = no gap.
+		wantGaps map[string]string
+	}{
+		{
+			name:     "a complete capture records no gaps",
+			wantGaps: map[string]string{},
+		},
+		{
+			// The normal, permanent case: the extension simply isn't there. It
+			// must not fail the snapshot, but it must not vanish either.
+			name:     "an unavailable feature is recorded as unavailable",
+			hintsErr: notInstalled,
+			wantGaps: map[string]string{cache.FeatureMissingIndexHints: cache.GapUnavailable},
+		},
+		{
+			// A denied permission is somebody's bug, so it gets the louder Kind.
+			name:     "a failed query is recorded as failed",
+			slowErr:  denied,
+			wantGaps: map[string]string{cache.FeatureSlowQueries: cache.GapFailed},
+		},
+		{
+			name:     "both sections missing are both recorded",
+			hintsErr: notInstalled,
+			slowErr:  denied,
+			wantGaps: map[string]string{
+				cache.FeatureMissingIndexHints: cache.GapUnavailable,
+				cache.FeatureSlowQueries:       cache.GapFailed,
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := &fakeCatalog{hintsErr: c.hintsErr, slowErr: c.slowErr}
+
+			e, err := pullSnapshot(fake, testDB(), defaultSlowQueryLimit)
+			// Deliberately not fatal: one absent catalog feature must not take
+			// `schema tables` and `schema describe` down with it.
+			if err != nil {
+				t.Fatalf("pullSnapshot: %v, want a snapshot with gaps recorded instead", err)
+			}
+			if len(e.Gaps) != len(c.wantGaps) {
+				t.Fatalf("Gaps = %+v, want %d of them", e.Gaps, len(c.wantGaps))
+			}
+			for feature, wantKind := range c.wantGaps {
+				g := e.Gap(feature)
+				if g == nil {
+					t.Fatalf("no gap recorded for %s; Gaps = %+v", feature, e.Gaps)
+				}
+				if g.Kind != wantKind {
+					t.Errorf("%s gap Kind = %q, want %q", feature, g.Kind, wantKind)
+				}
+				if g.Reason == "" {
+					t.Errorf("%s gap has no reason; the cause is the whole point", feature)
+				}
+			}
+			// Whatever is missing has to be visible on the provenance line every
+			// command already prints, or the record is useless.
+			line := (&snapshot{Entry: e, Live: true}).freshnessLine()
+			if len(c.wantGaps) == 0 && strings.Contains(line, "INCOMPLETE") {
+				t.Errorf("complete snapshot reported as incomplete: %q", line)
+			}
+			if len(c.wantGaps) > 0 && !strings.Contains(line, "INCOMPLETE") {
+				t.Errorf("partial snapshot reported as %q, want an INCOMPLETE marker", line)
+			}
+		})
+	}
+}
+
+// A gap is a property of the data, so it has to survive the cache file: the
+// command that reads the snapshot tomorrow must see the same hole.
+func TestSnapshotGapsSurviveTheCache(t *testing.T) {
+	useTempCache(t)
+	stubCatalog(t, &fakeCatalog{
+		slowErr: fmt.Errorf("pg_stat_statements extension not installed: %w", catalog.ErrNotSupported),
+	})
+
+	if _, err := loadOrFetch(&config.Config{}, testDB(), need{}); err != nil {
+		t.Fatalf("first loadOrFetch: %v", err)
+	}
+	snap, err := loadOrFetch(&config.Config{}, testDB(), need{})
+	if err != nil {
+		t.Fatalf("second loadOrFetch: %v", err)
+	}
+	if snap.Live {
+		t.Fatal("second call re-read the database; this test is about the cached path")
+	}
+	g := snap.Gap(cache.FeatureSlowQueries)
+	if g == nil {
+		t.Fatalf("the reloaded snapshot forgot its gap: %+v", snap.Entry)
+	}
+	if g.Kind != cache.GapUnavailable {
+		t.Errorf("Kind = %q, want %q", g.Kind, cache.GapUnavailable)
+	}
+}
+
+// End-to-end: the two commands whose output *is* the missing section must say so
+// rather than printing an empty result. JSON mode keeps stdout parseable and puts
+// the warning on stderr (which the MCP bridge relays); human mode prints inline.
+func TestIncompleteSnapshotIsSurfacedToTheUser(t *testing.T) {
+	unavailable := fmt.Errorf("pg_stat_statements extension not installed: %w", catalog.ErrNotSupported)
+
+	cases := []struct {
+		name string
+		args []string
+		fake *fakeCatalog
+		// wantWarn is a substring the user must see; wantJSONStdout asserts
+		// stdout is still a single parseable document.
+		wantWarn       string
+		wantJSONStdout bool
+	}{
+		{
+			name:           "queries slow names the missing extension",
+			args:           []string{"queries", "slow"},
+			fake:           &fakeCatalog{slowErr: unavailable},
+			wantWarn:       "pg_stat_statements",
+			wantJSONStdout: true,
+		},
+		{
+			name:           "indexes missing names the missing hints",
+			args:           []string{"indexes", "missing"},
+			fake:           &fakeCatalog{hintsErr: errors.New("permission denied")},
+			wantWarn:       "permission denied",
+			wantJSONStdout: true,
+		},
+		{
+			// An unrelated command still can't present a partial snapshot as
+			// whole — it rides the freshness line.
+			name:           "tables still reports that the snapshot is partial",
+			args:           []string{"tables"},
+			fake:           &fakeCatalog{slowErr: unavailable},
+			wantWarn:       "INCOMPLETE",
+			wantJSONStdout: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfgPath := writeSchemaConfig(t, t.TempDir(), "")
+			stubCatalog(t, c.fake)
+
+			stdout, stderr, err := runRoot(t, append(c.args,
+				"--config", cfgPath, "--cache-dir", t.TempDir())...)
+			if err != nil {
+				t.Fatalf("%v: %v", c.args, err)
+			}
+			if !strings.Contains(stderr, c.wantWarn) {
+				t.Errorf("stderr %q does not mention %q", stderr, c.wantWarn)
+			}
+			if c.wantJSONStdout && !json.Valid([]byte(stdout)) {
+				t.Errorf("stdout is not a single parseable JSON document: %q", stdout)
+			}
+
+			// Human mode carries the same warning on stdout instead.
+			stdout, _, err = runRoot(t, append(c.args, "--human",
+				"--config", cfgPath, "--cache-dir", t.TempDir())...)
+			if err != nil {
+				t.Fatalf("%v --human: %v", c.args, err)
+			}
+			if !strings.Contains(stdout, c.wantWarn) {
+				t.Errorf("human stdout %q does not mention %q", stdout, c.wantWarn)
+			}
+		})
+	}
+}
+
+// An empty slow-query list must not be phrased as a finding when the section was
+// never captured — "no slow queries" and "we couldn't look" are different claims.
+func TestQueriesSlowDistinguishesEmptyFromUnknown(t *testing.T) {
+	cases := []struct {
+		name    string
+		fake    *fakeCatalog
+		wantOut string
+		notWant string
+	}{
+		{
+			name:    "server genuinely reported none",
+			fake:    &fakeCatalog{slowRows: 0},
+			wantOut: "the server reported none",
+			notWant: "not 'none'",
+		},
+		{
+			name:    "section was never captured",
+			fake:    &fakeCatalog{slowErr: errors.New("boom")},
+			wantOut: "not 'none'",
+			notWant: "the server reported none",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfgPath := writeSchemaConfig(t, t.TempDir(), "")
+			stubCatalog(t, c.fake)
+
+			stdout, _, err := runRoot(t, "queries", "slow", "--human",
+				"--config", cfgPath, "--cache-dir", t.TempDir())
+			if err != nil {
+				t.Fatalf("queries slow --human: %v", err)
+			}
+			if !strings.Contains(stdout, c.wantOut) {
+				t.Errorf("output %q does not contain %q", stdout, c.wantOut)
+			}
+			if strings.Contains(stdout, c.notWant) {
+				t.Errorf("output %q should not contain %q", stdout, c.notWant)
+			}
+		})
 	}
 }
 

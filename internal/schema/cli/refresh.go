@@ -70,6 +70,12 @@ If --db is passed only that database is refreshed.`,
 				}
 				fmt.Fprintf(w, "  %s: %d tables, %d indexes (%v)\n",
 					db.Name, len(entry.Schema.Tables), countIndexes(entry.Schema.Tables), time.Since(start).Round(time.Millisecond))
+				// refresh is where a snapshot is born, so it is the best place to
+				// learn that it was born incomplete — otherwise the user sees a
+				// clean "N tables" line and only meets the hole days later.
+				for _, g := range entry.Gaps {
+					fmt.Fprintf(w, "    incomplete: %s\n", g)
+				}
 			}
 			return nil
 		},

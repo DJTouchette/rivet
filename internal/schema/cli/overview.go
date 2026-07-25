@@ -82,15 +82,28 @@ func overviewCmd() *cobra.Command {
 				ov.Databases = append(ov.Databases, summary)
 			}
 
-			// Migrations
-			dirs := cfg.Migrations.AllDirs()
-			for _, d := range dirs {
-				res, err := migrations.Parse(d, migrations.Options{Dialect: cfg.Migrations.Dialect})
+			// Migrations: every configured root, merged. This used to stop at the
+			// first root that parsed, so a second root was reported as if it did
+			// not exist. A root that can't be read now shows up as a Source with
+			// an Error instead of being skipped.
+			if dirs := cfg.Migrations.AllDirs(); len(dirs) > 0 {
+				res, err := migrations.ParseAll(dirs, migrations.Options{Dialect: cfg.Migrations.Dialect})
 				if err != nil {
-					continue
+					// No root was readable. Overview summarises rather than fails,
+					// so this is reported in-band alongside the databases.
+					ov.Migrations = &types.MigrationsSummary{
+						Directory: dirs[0],
+						Dialect:   cfg.Migrations.Dialect,
+						Warnings:  []string{"no migration root could be read: " + err.Error()},
+					}
+				} else {
+					ov.Migrations = &res.Summary
+					if !flagHuman {
+						// Human mode prints the same facts inline in the
+						// migrations section below; this avoids saying it twice.
+						reportMigrationProblems(cmd, res)
+					}
 				}
-				ov.Migrations = &res.Summary
-				break
 			}
 
 			if flagHuman {
@@ -128,11 +141,23 @@ func printOverviewHuman(cmd *cobra.Command, ov *types.Overview) {
 
 	if ov.Migrations != nil {
 		m := ov.Migrations
-		fmt.Fprintf(w, "\nMigrations: %d files in %s (%d tables, %d indexes)",
-			m.Files, m.Directory, m.Tables, m.Indexes)
+		fmt.Fprintf(w, "\nMigrations: %d files across %d root(s) (%d tables, %d indexes)",
+			m.Files, len(m.Sources), m.Tables, m.Indexes)
 		if len(m.Unparsed) > 0 {
 			fmt.Fprintf(w, "  — %d files partially unparsed", len(m.Unparsed))
 		}
 		fmt.Fprintln(w)
+		// Per-root breakdown: the total above can't show that one of two roots
+		// contributed nothing, which is exactly the failure being guarded against.
+		for _, s := range m.Sources {
+			if s.Error != "" {
+				fmt.Fprintf(w, "  %s: FAILED — %s\n", s.Directory, s.Error)
+				continue
+			}
+			fmt.Fprintf(w, "  %s: %d file(s)\n", s.Directory, s.Files)
+		}
+		for _, warn := range m.Warnings {
+			fmt.Fprintf(w, "  warning: %s\n", warn)
+		}
 	}
 }

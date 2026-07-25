@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
+	"github.com/djtouchette/rivet/internal/schema/catalog"
 )
 
 func TestParseIndexDef(t *testing.T) {
@@ -119,6 +122,91 @@ func TestLoadersChain(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Error(err)
+	}
+}
+
+// The optional stats extensions used to return (nil, nil) when absent, which the
+// caller could only read as "this server has no slow queries / no hints". They
+// now report catalog.ErrNotSupported so an absence of data is distinguishable
+// from an absence of the ability to look.
+func TestOptionalExtensionsAreNotSilent(t *testing.T) {
+	cases := []struct {
+		name string
+		// installed drives the pg_extension existence probe.
+		installed bool
+		// queryFails makes the follow-up stats query error, standing in for a
+		// denied permission or a stats view with different column names.
+		queryFails bool
+		// call runs the driver method under test.
+		call func(d *driver) error
+		// pattern is the stats query sqlmock should expect (empty = none run).
+		pattern      string
+		wantNotSupp  bool // errors.Is(err, catalog.ErrNotSupported)
+		wantSomeErr  bool // any error at all
+		wantNilError bool
+	}{
+		{
+			name:        "missing pg_qualstats is reported as unsupported",
+			call:        func(d *driver) error { _, err := d.MissingIndexHints(context.Background()); return err },
+			wantNotSupp: true,
+			wantSomeErr: true,
+		},
+		{
+			name:        "missing pg_stat_statements is reported as unsupported",
+			call:        func(d *driver) error { _, err := d.SlowQueries(context.Background(), 5); return err },
+			wantNotSupp: true,
+			wantSomeErr: true,
+		},
+		{
+			// Installed but unreadable is a different problem with a different
+			// fix, so it must not be flattened into ErrNotSupported.
+			name:        "a failing pg_stat_statements query surfaces the real error",
+			installed:   true,
+			queryFails:  true,
+			pattern:     "pg_stat_statements",
+			call:        func(d *driver) error { _, err := d.SlowQueries(context.Background(), 5); return err },
+			wantSomeErr: true,
+		},
+		{
+			name:         "an installed, empty pg_stat_statements is a genuine empty result",
+			installed:    true,
+			pattern:      "pg_stat_statements",
+			call:         func(d *driver) error { _, err := d.SlowQueries(context.Background(), 5); return err },
+			wantNilError: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			mock.ExpectQuery("pg_extension").WillReturnRows(
+				sqlmock.NewRows([]string{"exists"}).AddRow(c.installed))
+			if c.pattern != "" {
+				q := mock.ExpectQuery(c.pattern)
+				if c.queryFails {
+					q.WillReturnError(errors.New("permission denied"))
+				} else {
+					q.WillReturnRows(sqlmock.NewRows([]string{
+						"query", "calls", "total", "mean", "rows", "hit", "read"}))
+				}
+			}
+
+			err = c.call(&driver{db: db, schema: "public"})
+			if c.wantNilError && err != nil {
+				t.Fatalf("got error %v, want a clean empty result", err)
+			}
+			if c.wantSomeErr && err == nil {
+				t.Fatal("got nil error; an uncaptured section must not look like an empty one")
+			}
+			if got := errors.Is(err, catalog.ErrNotSupported); got != c.wantNotSupp {
+				t.Errorf("errors.Is(err, ErrNotSupported) = %v, want %v (err = %v)", got, c.wantNotSupp, err)
+			}
+		})
 	}
 }
 

@@ -225,11 +225,33 @@ type DatabaseSummary struct {
 }
 
 // MigrationsSummary describes what was parsed from on-disk migration files.
+// Counts are totals across every configured root; Sources breaks them down so a
+// root that contributed nothing (or failed) can't hide inside the total.
 type MigrationsSummary struct {
-	Directory string   `json:"directory"`
-	Files     int      `json:"files"`
-	Tables    int      `json:"tables"`
-	Indexes   int      `json:"indexes"`
-	Dialect   string   `json:"dialect,omitempty"`
-	Unparsed  []string `json:"unparsed,omitempty"`
+	// Directory is the first configured root. Kept for callers that predate
+	// multi-root support — read Sources for the full picture.
+	Directory string `json:"directory"`
+
+	// Sources is every configured root, in the order they were applied.
+	Sources []MigrationSource `json:"sources,omitempty"`
+
+	Files    int      `json:"files"`
+	Tables   int      `json:"tables"`
+	Indexes  int      `json:"indexes"`
+	Dialect  string   `json:"dialect,omitempty"`
+	Unparsed []string `json:"unparsed,omitempty"`
+
+	// Warnings records merge ambiguities — chiefly the same migration filename
+	// appearing in more than one root, where "which one runs first" is a guess.
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// MigrationSource is one migration root and what it contributed to the merge.
+type MigrationSource struct {
+	Directory string `json:"directory"`
+	Files     int    `json:"files"`
+
+	// Error is non-empty when this root could not be read. The other roots are
+	// still merged; a partial result is reported as partial rather than as whole.
+	Error string `json:"error,omitempty"`
 }

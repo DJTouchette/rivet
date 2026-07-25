@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -84,14 +85,25 @@ func pullSnapshot(cat catalog.Catalog, dbCfg *config.Database, slowLimit int) (*
 	if err != nil {
 		return nil, fmt.Errorf("loading index usage for %s: %w", dbCfg.Name, err)
 	}
+
+	// Hints and slow queries are *optional* catalog sections, so a failure here
+	// is recorded rather than fatal: pg_qualstats and pg_stat_statements are
+	// absent on plenty of perfectly healthy databases, and failing the whole
+	// snapshot would take `schema tables` and `schema describe` down with them.
+	// What is not acceptable is the old behaviour of storing nil and moving on —
+	// that made "we couldn't look" indistinguishable from "there are none". Every
+	// failure becomes a Gap that travels with the snapshot (including through the
+	// cache file) and is surfaced by reportFreshness on every command.
+	var gaps []cache.Gap
 	hints, err := cat.MissingIndexHints(ctx)
 	if err != nil {
-		// Don't hard-fail if hints are unavailable — extension may not be installed.
 		hints = nil
+		gaps = append(gaps, newGap(cache.FeatureMissingIndexHints, err))
 	}
 	slow, err := cat.SlowQueries(ctx, slowLimit)
 	if err != nil {
 		slow = nil
+		gaps = append(gaps, newGap(cache.FeatureSlowQueries, err))
 	}
 
 	e := &cache.Entry{
@@ -103,8 +115,22 @@ func pullSnapshot(cat catalog.Catalog, dbCfg *config.Database, slowLimit int) (*
 		Hints:          hints,
 		SlowQueries:    slow,
 		SlowQueryLimit: slowLimit,
+		Gaps:           gaps,
 	}
 	return e, nil
+}
+
+// newGap classifies a capture failure. A driver that wraps catalog.ErrNotSupported
+// is telling us the engine simply doesn't expose the feature — a permanent,
+// blameless condition — while anything else (permission denied, a malformed
+// stats view, a timeout) is a problem somebody can fix. Both are recorded; only
+// the wording and the Kind differ.
+func newGap(feature string, err error) cache.Gap {
+	kind := cache.GapFailed
+	if errors.Is(err, catalog.ErrNotSupported) {
+		kind = cache.GapUnavailable
+	}
+	return cache.Gap{Feature: feature, Kind: kind, Reason: err.Error()}
 }
 
 // need describes what a command requires of a snapshot beyond being fresh.
@@ -214,35 +240,67 @@ func pingDatabase(dbCfg *config.Database) error {
 }
 
 // freshnessLine renders the one-line provenance banner shown with every result
-// that came out of the cache.
+// that came out of the cache. Incompleteness rides the same line as age: both
+// answer "how much should I trust this?", and there is exactly one place a
+// command can forget to print.
 func (s *snapshot) freshnessLine() string {
+	var line string
 	if s.Live {
-		return "snapshot: live — just read from the database"
-	}
-
-	when := "unknown time"
-	if !s.FetchedAt.IsZero() {
-		when = s.FetchedAt.Format(time.RFC3339)
-	}
-	line := fmt.Sprintf("snapshot: %s old (fetched %s)", humanAge(s.Age), when)
-	if s.Stale {
-		line += fmt.Sprintf(" — STALE, past the %s max age; run 'rivet schema refresh'", humanDuration(s.MaxAge))
+		line = "snapshot: live — just read from the database"
+	} else {
+		when := "unknown time"
+		if !s.FetchedAt.IsZero() {
+			when = s.FetchedAt.Format(time.RFC3339)
+		}
+		line = fmt.Sprintf("snapshot: %s old (fetched %s)", humanAge(s.Age), when)
+		if s.Stale {
+			line += fmt.Sprintf(" — STALE, past the %s max age; run 'rivet schema refresh'", humanDuration(s.MaxAge))
+		}
 	}
 	if s.Warning != "" {
 		line += " — " + s.Warning
 	}
+	if gaps := s.GapSummary(); gaps != "" {
+		line += " — INCOMPLETE: " + gaps
+	}
 	return line
 }
 
-// reportFreshness surfaces the snapshot's age so cached data can never pass
-// itself off as live. Human mode gets it inline on stdout; JSON mode gets it on
-// stderr so stdout stays a single parseable document (the MCP bridge relays
-// stderr to the caller, so it stays visible there too).
+// reportFreshness surfaces the snapshot's age and any missing sections so cached
+// or partial data can never pass itself off as live and complete. Human mode gets
+// it inline on stdout; JSON mode gets it on stderr so stdout stays a single
+// parseable document (the MCP bridge relays stderr to the caller, so it stays
+// visible there too).
 func reportFreshness(cmd *cobra.Command, s *snapshot) {
 	if s == nil {
 		return
 	}
-	line := s.freshnessLine()
+	reportLine(cmd, s.freshnessLine())
+}
+
+// reportGap warns when the very section a command exists to show is the one
+// missing from the snapshot. freshnessLine already mentions it, but there the
+// reader has to connect "INCOMPLETE: slow_queries" to the empty list they are
+// looking at; this says it outright, because an empty result read as "none"
+// is the failure this whole mechanism exists to prevent.
+//
+// what names the data in the command's own words, e.g. "slow queries".
+func reportGap(cmd *cobra.Command, s *snapshot, feature, what string) {
+	if s == nil {
+		return
+	}
+	g := s.Gap(feature)
+	if g == nil {
+		return
+	}
+	reportLine(cmd, fmt.Sprintf(
+		"WARNING: %s were not captured in this snapshot (%s: %s) — this result is 'unknown', not 'none'",
+		what, g.Kind, g.Reason))
+}
+
+// reportLine writes one out-of-band provenance line: stdout in human mode,
+// stderr in JSON mode so stdout stays a single parseable document.
+func reportLine(cmd *cobra.Command, line string) {
 	if flagHuman {
 		fmt.Fprintln(cmd.OutOrStdout(), line)
 		return

@@ -71,7 +71,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Fatalf("Load(missing) = %v, %v; want nil, nil", e, err)
 	}
 
-	in := &Entry{Name: "prod", Engine: types.EnginePostgres, Host: "db.local", FetchedAt: time.Now().UTC().Truncate(time.Second), SlowQueryLimit: 50}
+	in := &Entry{Name: "prod", Engine: types.EnginePostgres, Host: "db.local", FetchedAt: time.Now().UTC().Truncate(time.Second), SlowQueryLimit: 50,
+		Gaps: []Gap{{Feature: FeatureSlowQueries, Kind: GapUnavailable, Reason: "pg_stat_statements not installed"}}}
 	if err := st.Save(in); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -86,6 +87,19 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	// to know how many rows it was allowed to capture.
 	if out.SlowQueryLimit != 50 {
 		t.Errorf("SlowQueryLimit = %d, want 50", out.SlowQueryLimit)
+	}
+
+	// Gaps must survive too. A gap that is lost on reload turns back into the
+	// original bug one command later: an empty section read as a real "none".
+	g := out.Gap(FeatureSlowQueries)
+	if g == nil {
+		t.Fatalf("gap lost in the round trip: %+v", out)
+	}
+	if g.Kind != GapUnavailable || g.Reason == "" {
+		t.Errorf("gap round-tripped as %+v", *g)
+	}
+	if out.Gap(FeatureMissingIndexHints) != nil {
+		t.Error("Gap() invented a gap for a feature that was captured fine")
 	}
 
 	names, err := st.List()

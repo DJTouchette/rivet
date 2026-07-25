@@ -1,8 +1,13 @@
 // Package postgres implements the Catalog interface for PostgreSQL.
 //
 // All queries target system catalogs and stats views — nothing ever touches
-// application data. pg_stat_statements is consulted when available; if it
-// isn't installed the slow-query query returns empty instead of failing.
+// application data.
+//
+// The optional stats extensions (pg_stat_statements, pg_qualstats) are consulted
+// when present and reported as catalog.ErrNotSupported when absent. Returning an
+// error rather than an empty slice is what lets the caller distinguish "this
+// server has no slow queries" from "this server cannot tell us"; the caller
+// decides that a missing extension is not fatal.
 package postgres
 
 import (
@@ -304,12 +309,14 @@ func (d *driver) IndexUsage(ctx context.Context) ([]types.IndexUsage, error) {
 	return out, rows.Err()
 }
 
-// MissingIndexHints queries pg_qualstats if present; otherwise returns nil.
-// Postgres does not expose native missing-index hints, but pg_qualstats
-// (if installed) suggests column candidates from observed predicates.
+// MissingIndexHints queries pg_qualstats if present. Postgres does not expose
+// native missing-index hints, but pg_qualstats (if installed) suggests column
+// candidates from observed predicates. Without the extension the result is
+// catalog.ErrNotSupported, not an empty list: the caller must be able to tell
+// the two apart before reporting "no missing indexes".
 func (d *driver) MissingIndexHints(ctx context.Context) ([]types.MissingIndexHint, error) {
 	if !d.extensionInstalled(ctx, "pg_qualstats") {
-		return nil, nil
+		return nil, fmt.Errorf("pg_qualstats extension not installed: %w", catalog.ErrNotSupported)
 	}
 	const q = `
 		SELECT schemaname, relname, array_agg(DISTINCT attname), sum(execution_count)
@@ -321,8 +328,10 @@ func (d *driver) MissingIndexHints(ctx context.Context) ([]types.MissingIndexHin
 
 	rows, err := d.db.QueryContext(ctx, q)
 	if err != nil {
-		// View shape varies across pg_qualstats versions — soft-fail.
-		return nil, nil
+		// The view shape varies across pg_qualstats versions, so this is an
+		// expected-ish failure — but it is still a failure, and reporting it is
+		// how the user finds out their hints are silently absent.
+		return nil, fmt.Errorf("querying pg_qualstats_by_query: %w", err)
 	}
 	defer rows.Close()
 
@@ -342,10 +351,12 @@ func (d *driver) MissingIndexHints(ctx context.Context) ([]types.MissingIndexHin
 	return out, rows.Err()
 }
 
-// SlowQueries pulls from pg_stat_statements when available.
+// SlowQueries pulls from pg_stat_statements. Without the extension the result is
+// catalog.ErrNotSupported rather than an empty list — an empty list would read as
+// "this server ran no slow queries", which is a much stronger claim.
 func (d *driver) SlowQueries(ctx context.Context, limit int) ([]types.SlowQuery, error) {
 	if !d.extensionInstalled(ctx, "pg_stat_statements") {
-		return nil, nil
+		return nil, fmt.Errorf("pg_stat_statements extension not installed: %w", catalog.ErrNotSupported)
 	}
 	if limit <= 0 {
 		limit = 25
@@ -359,7 +370,8 @@ func (d *driver) SlowQueries(ctx context.Context, limit int) ([]types.SlowQuery,
 
 	rows, err := d.db.QueryContext(ctx, q, limit)
 	if err != nil {
-		return nil, nil // e.g. older pg_stat_statements with different column names
+		// e.g. an older pg_stat_statements whose columns are named differently.
+		return nil, fmt.Errorf("querying pg_stat_statements: %w", err)
 	}
 	defer rows.Close()
 

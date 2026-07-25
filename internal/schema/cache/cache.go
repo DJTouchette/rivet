@@ -8,10 +8,45 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/djtouchette/rivet/internal/schema/types"
 )
+
+// Feature names for the optional catalog sections a snapshot may be missing.
+// They double as the identifiers in Gap.Feature, so they are part of the JSON
+// contract an agent reads.
+const (
+	FeatureMissingIndexHints = "missing_index_hints"
+	FeatureSlowQueries       = "slow_queries"
+)
+
+// Gap kinds. The distinction matters to the reader: Unavailable is a fact about
+// the database (pg_qualstats is not installed and probably never will be) and
+// needs no action, whereas Failed is a problem to fix (permission denied, a
+// query that errored, a timeout).
+const (
+	GapUnavailable = "unavailable"
+	GapFailed      = "failed"
+)
+
+// Gap records an optional catalog section that this snapshot does not contain.
+//
+// It exists so an empty Hints or SlowQueries slice can be read correctly: with
+// no Gap the emptiness is an answer ("the server reported none"), with a Gap it
+// is an absence of an answer ("we never found out"). Those were indistinguishable
+// before, which made a partial snapshot look complete.
+type Gap struct {
+	Feature string `json:"feature"` // one of the Feature* constants
+	Kind    string `json:"kind"`    // GapUnavailable or GapFailed
+	Reason  string `json:"reason"`  // the underlying error, as text
+}
+
+// String renders one gap for human and log output.
+func (g Gap) String() string {
+	return fmt.Sprintf("%s %s (%s)", g.Feature, g.Kind, g.Reason)
+}
 
 // Entry is one persisted snapshot.
 type Entry struct {
@@ -28,6 +63,11 @@ type Entry struct {
 	// later request for *more* rows than were ever fetched can tell the
 	// difference between "the server had no more" and "we never asked".
 	SlowQueryLimit int `json:"slow_query_limit,omitempty"`
+
+	// Gaps lists the sections that could not be captured. Persisted with the
+	// snapshot: a gap is a property of the data, so it has to survive the round
+	// trip through disk or the next command reads the same hole as a zero.
+	Gaps []Gap `json:"gaps,omitempty"`
 }
 
 // Age reports how long ago the snapshot was taken, relative to now.
@@ -52,6 +92,32 @@ func (e *Entry) IsStale(now time.Time, maxAge time.Duration) bool {
 		return true
 	}
 	return e.Age(now) >= maxAge
+}
+
+// Gap returns the recorded gap for a feature, or nil when that section was
+// captured successfully.
+func (e *Entry) Gap(feature string) *Gap {
+	if e == nil {
+		return nil
+	}
+	for i := range e.Gaps {
+		if e.Gaps[i].Feature == feature {
+			return &e.Gaps[i]
+		}
+	}
+	return nil
+}
+
+// GapSummary renders every gap on one line, or "" for a complete snapshot.
+func (e *Entry) GapSummary() string {
+	if e == nil || len(e.Gaps) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(e.Gaps))
+	for _, g := range e.Gaps {
+		parts = append(parts, g.String())
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Store is a filesystem-backed cache. Zero value is unusable — call Open.

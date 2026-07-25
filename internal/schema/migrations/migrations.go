@@ -11,6 +11,7 @@
 package migrations
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -41,19 +42,46 @@ type Result struct {
 }
 
 // Parse reads all SQL files under dir (recursively) in lexical order
-// and accumulates a synthetic schema.
+// and accumulates a synthetic schema. It is ParseAll with a single root.
 func Parse(dir string, opts Options) (*Result, error) {
+	return ParseAll([]string{dir}, opts)
+}
+
+// ParseAll merges every configured migration root into one schema.
+//
+// # Ordering
+//
+// Roots are replayed in the order they were configured (schema.migrations.dir
+// first, then schema.migrations.dirs), and within a root the files keep their
+// existing lexical full-path order. Files are NOT interleaved across roots by
+// filename, even though migrations within a root are sequential: two roots have
+// two independent numbering spaces, so a global sort by name would invent an
+// ordering nobody wrote down and would reorder DDL relative to how a single root
+// behaves today. Configured order is arbitrary but explicit, deterministic, and
+// under the user's control.
+//
+// One parser is shared across roots, so a later root can ALTER or DROP something
+// an earlier root created; the result is a merged schema, not two glued together.
+// Where the same filename appears in more than one root the ordering is genuinely
+// ambiguous, so that is reported in Summary.Warnings rather than resolved
+// silently.
+//
+// # Partial failure
+//
+// A root that cannot be read is recorded in its MigrationSource.Error and the
+// remaining roots are still merged: half a schema clearly labelled as half is
+// more useful than no schema. If *every* root fails there is nothing to return
+// and the errors are returned joined.
+func ParseAll(dirs []string, opts Options) (*Result, error) {
+	if len(dirs) == 0 {
+		return nil, fmt.Errorf("no migration directories given")
+	}
 	if opts.DefaultSchema == "" {
 		if opts.Dialect == "mssql" {
 			opts.DefaultSchema = "dbo"
 		} else {
 			opts.DefaultSchema = "public"
 		}
-	}
-
-	files, err := discover(dir)
-	if err != nil {
-		return nil, err
 	}
 
 	sch := &types.Schema{
@@ -73,15 +101,83 @@ func Parse(dir string, opts Options) (*Result, error) {
 		tables:        make(map[string]*types.Table),
 	}
 
-	for _, f := range files {
-		content, err := os.ReadFile(f)
+	var (
+		sources    []types.MigrationSource
+		warnings   []string
+		errs       []error
+		totalFiles int
+		// seenRoot dedupes roots that resolve to the same path (easy to do by
+		// listing a directory in both `dir` and `dirs`); replaying one twice
+		// would double the file count and re-run its DDL.
+		seenRoot = map[string]bool{}
+		// seenBase maps a migration filename to the first root that held it, so
+		// a collision across roots can be named in the warning.
+		seenBase = map[string]string{}
+	)
+
+	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		if seenRoot[clean] {
+			warnings = append(warnings, fmt.Sprintf("migration root %s is configured more than once; applied once", dir))
+			continue
+		}
+		seenRoot[clean] = true
+
+		src := types.MigrationSource{Directory: dir}
+		files, err := discover(dir)
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", f, err)
+			src.Error = err.Error()
+			errs = append(errs, err)
+			sources = append(sources, src)
+			continue
 		}
-		p.file = filepath.Base(f)
-		if err := p.parse(string(content)); err != nil {
-			p.unparsed = append(p.unparsed, p.file)
+
+		for _, f := range files {
+			base := filepath.Base(f)
+			if first, dup := seenBase[base]; dup && first != dir {
+				warnings = append(warnings, fmt.Sprintf(
+					"migration %s appears in both %s and %s; roots are applied in configured order, not merged by filename", base, first, dir))
+			} else if !dup {
+				seenBase[base] = dir
+			}
+
+			content, err := os.ReadFile(f)
+			if err != nil {
+				// Stop this root but keep the others: whatever it already
+				// contributed stays, and the failure is on the record.
+				src.Error = fmt.Errorf("reading %s: %w", f, err).Error()
+				errs = append(errs, err)
+				break
+			}
+			// The full path, not the base name: with several roots in play a bare
+			// "001_init.sql" in Unparsed wouldn't say which root it came from.
+			p.file = f
+			if err := p.parse(string(content)); err != nil {
+				p.unparsed = append(p.unparsed, p.file)
+			}
+			src.Files++
 		}
+
+		totalFiles += src.Files
+		sources = append(sources, src)
+	}
+
+	// Nothing readable anywhere is a hard error — there is no schema to report.
+	// An empty-but-readable root is not a failure, so this counts readable roots
+	// rather than files.
+	readable := 0
+	for _, s := range sources {
+		if s.Error == "" {
+			readable++
+		}
+	}
+	if readable == 0 {
+		if len(errs) == 0 {
+			// Defensive: never return (nil, nil), which a caller would read as
+			// "an empty schema is correct".
+			return nil, fmt.Errorf("no readable migration directories in %v", dirs)
+		}
+		return nil, errors.Join(errs...)
 	}
 
 	// Flatten tables into slice (sorted for deterministic output).
@@ -102,12 +198,14 @@ func Parse(dir string, opts Options) (*Result, error) {
 	return &Result{
 		Schema: sch,
 		Summary: types.MigrationsSummary{
-			Directory: dir,
-			Files:     len(files),
+			Directory: dirs[0],
+			Sources:   sources,
+			Files:     totalFiles,
 			Tables:    len(sch.Tables),
 			Indexes:   totalIndexes,
 			Dialect:   opts.Dialect,
 			Unparsed:  p.unparsed,
+			Warnings:  warnings,
 		},
 		Unparsed: p.unparsed,
 	}, nil

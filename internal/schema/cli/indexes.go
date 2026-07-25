@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/djtouchette/rivet/internal/schema/analyze"
+	"github.com/djtouchette/rivet/internal/schema/cache"
 	"github.com/djtouchette/rivet/internal/schema/config"
 	"github.com/djtouchette/rivet/internal/schema/queryextract"
 	"github.com/djtouchette/rivet/internal/schema/types"
@@ -182,6 +183,10 @@ When both signals converge on the same table+columns, confidence is "high".`,
 				return err
 			}
 			reportFreshness(cmd, entry)
+			// Engine hints are one of this command's two signals. Losing them
+			// silently would downgrade "high" confidence findings to "code only"
+			// with no trace, so the absence is named.
+			reportGap(cmd, entry, cache.FeatureMissingIndexHints, "engine missing-index hints")
 			queries, err := scanQueries(cfg)
 			if err != nil {
 				return err

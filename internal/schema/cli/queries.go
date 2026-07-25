@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/djtouchette/rivet/internal/schema/cache"
 	"github.com/djtouchette/rivet/internal/schema/types"
 )
 
@@ -75,12 +76,16 @@ Returns the top N queries by total elapsed time.`,
 				return err
 			}
 			reportFreshness(cmd, entry)
+			// This command's entire output is the slow-query list, so if that is
+			// the section the snapshot is missing, say so before printing an
+			// empty one.
+			reportGap(cmd, entry, cache.FeatureSlowQueries, "slow queries")
 			slow := entry.SlowQueries
 			if limit > 0 && len(slow) > limit {
 				slow = slow[:limit]
 			}
 			if flagHuman {
-				printSlowHuman(cmd, slow)
+				printSlowHuman(cmd, slow, entry.Gap(cache.FeatureSlowQueries) == nil)
 				return nil
 			}
 			return outputJSON(cmd, slow)
@@ -90,10 +95,16 @@ Returns the top N queries by total elapsed time.`,
 	return cmd
 }
 
-func printSlowHuman(cmd *cobra.Command, slow []types.SlowQuery) {
+// printSlowHuman renders the list. captured is false when the snapshot has a gap
+// for slow queries, in which case the empty-list message must not be printed at
+// all: it would assert "none" over data that was never read. reportGap has
+// already explained the absence.
+func printSlowHuman(cmd *cobra.Command, slow []types.SlowQuery, captured bool) {
 	w := cmd.OutOrStdout()
 	if len(slow) == 0 {
-		fmt.Fprintln(w, "No slow queries available — extension may be missing or the server has no activity yet.")
+		if captured {
+			fmt.Fprintln(w, "No slow queries in the snapshot — the server reported none.")
+		}
 		return
 	}
 	fmt.Fprintf(w, "Top %d queries by total time:\n", len(slow))

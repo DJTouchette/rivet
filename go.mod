@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/djtouchette/recon v0.10.0
+	github.com/djtouchette/recon v0.11.0
 	github.com/djtouchette/vaulty v0.4.0
 	github.com/djtouchette/witness v0.4.2
 	github.com/jackc/pgx/v5 v5.9.1

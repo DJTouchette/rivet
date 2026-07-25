@@ -22,13 +22,14 @@ func tablesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
 			if entry.Schema == nil {
 				return fmt.Errorf("schema snapshot is empty; refresh may have failed")
 			}
+			reportFreshness(cmd, entry)
 
 			if flagHuman {
 				printTablesHuman(cmd, entry.Schema)

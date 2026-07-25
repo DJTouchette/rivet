@@ -67,10 +67,14 @@ Returns the top N queries by total elapsed time.`,
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			// The limit is applied when the snapshot is captured, not when it's
+			// printed, so it has to travel with the request: a snapshot taken
+			// with limit 25 can't answer --limit 50 and must be re-read.
+			entry, err := loadOrFetch(cfg, db, need{SlowQueryLimit: limit})
 			if err != nil {
 				return err
 			}
+			reportFreshness(cmd, entry)
 			slow := entry.SlowQueries
 			if limit > 0 && len(slow) > limit {
 				slow = slow[:limit]

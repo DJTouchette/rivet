@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -25,6 +26,10 @@ type Config struct {
 
 	// CodeScan controls query extraction from application source.
 	CodeScan CodeScanConfig `yaml:"code_scan,omitempty" json:"code_scan,omitempty"`
+
+	// Cache controls how long an on-disk snapshot may be served before the
+	// database is re-read.
+	Cache CacheConfig `yaml:"cache,omitempty" json:"cache,omitempty"`
 }
 
 // Database is a single connection target.
@@ -75,6 +80,40 @@ type CodeScanConfig struct {
 	// Languages limits extraction to specific languages
 	// (valid: "csharp", "go", "python", "node"). Default: all.
 	Languages []string `yaml:"languages,omitempty" json:"languages,omitempty"`
+}
+
+// DefaultCacheMaxAge is how long a snapshot may be served before it is
+// re-read from the database. A day is chosen because the things a snapshot
+// carries move on very different clocks: DDL changes land with a deploy, but
+// index usage counters and slow-query stats drift continuously. Anything
+// longer and "unused index" verdicts start describing last week's traffic;
+// anything shorter and ordinary interactive use pays a dial on every command.
+const DefaultCacheMaxAge = 24 * time.Hour
+
+// CacheConfig tunes snapshot freshness.
+type CacheConfig struct {
+	// MaxAge is a Go duration string ("30m", "12h", "7d" is NOT valid — use
+	// "168h"). Empty means DefaultCacheMaxAge. "0s" disables caching for
+	// reads: every command re-reads the database and the snapshot becomes a
+	// pure write-through fallback for when the DB is unreachable.
+	MaxAge string `yaml:"max_age,omitempty" json:"max_age,omitempty"`
+}
+
+// MaxAgeDuration resolves MaxAge, applying the default when unset. A bad value
+// is an error rather than a silent fallback: silently ignoring a misconfigured
+// TTL would reintroduce exactly the staleness this setting exists to prevent.
+func (c CacheConfig) MaxAgeDuration() (time.Duration, error) {
+	if strings.TrimSpace(c.MaxAge) == "" {
+		return DefaultCacheMaxAge, nil
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(c.MaxAge))
+	if err != nil {
+		return 0, fmt.Errorf("schema.cache.max_age %q: %w (want a Go duration like \"30m\" or \"12h\")", c.MaxAge, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("schema.cache.max_age %q: must not be negative", c.MaxAge)
+	}
+	return d, nil
 }
 
 // Default returns an empty config with sensible defaults applied.

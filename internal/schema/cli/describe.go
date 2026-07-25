@@ -24,13 +24,14 @@ func describeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
 			if entry.Schema == nil {
 				return fmt.Errorf("schema snapshot is empty")
 			}
+			reportFreshness(cmd, entry)
 			t := findTable(entry.Schema, args[0])
 			if t == nil {
 				return fmt.Errorf("table %q not found — try schema.tables first", args[0])

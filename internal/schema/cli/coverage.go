@@ -24,10 +24,11 @@ func coverageCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
+			reportFreshness(cmd, entry)
 			queries, err := scanQueries(cfg)
 			if err != nil {
 				return err

@@ -209,11 +209,19 @@ type DatabaseSummary struct {
 	Name       string `json:"name"`
 	Engine     Engine `json:"engine"`
 	Host       string `json:"host,omitempty"`
+	// Connected means the database answered a ping during this command — not
+	// merely that a snapshot file exists on disk.
 	Connected  bool   `json:"connected"`
 	Tables     int    `json:"tables"`
 	Views      int    `json:"views"`
 	Indexes    int    `json:"indexes"`
 	Error      string `json:"error,omitempty"`
+
+	// Snapshot provenance: the counts above come from the cache, so the
+	// summary carries the age of the data that produced them.
+	SnapshotFetchedAt string `json:"snapshot_fetched_at,omitempty"` // RFC3339
+	SnapshotAge       string `json:"snapshot_age,omitempty"`        // e.g. "6d04h"
+	SnapshotStale     bool   `json:"snapshot_stale,omitempty"`
 }
 
 // MigrationsSummary describes what was parsed from on-disk migration files.

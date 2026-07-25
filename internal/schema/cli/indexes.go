@@ -41,10 +41,14 @@ func indexesListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
+			if entry.Schema == nil {
+				return fmt.Errorf("schema snapshot is empty; refresh may have failed")
+			}
+			reportFreshness(cmd, entry)
 			type row struct {
 				Schema  string   `json:"schema"`
 				Table   string   `json:"table"`
@@ -107,10 +111,11 @@ to — unused-in-dev doesn't mean unused-in-prod.`,
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
+			reportFreshness(cmd, entry)
 			unused := analyze.DetectUnused(entry.Schema, entry.IndexUsage)
 			if flagHuman {
 				printUnusedHuman(cmd, unused)
@@ -134,10 +139,11 @@ func indexesRedundantCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
+			reportFreshness(cmd, entry)
 			red := analyze.DetectRedundant(entry.Schema)
 			if flagHuman {
 				printRedundantHuman(cmd, red)
@@ -171,10 +177,11 @@ When both signals converge on the same table+columns, confidence is "high".`,
 			if err != nil {
 				return err
 			}
-			entry, err := loadOrFetch(db)
+			entry, err := loadOrFetch(cfg, db, need{})
 			if err != nil {
 				return err
 			}
+			reportFreshness(cmd, entry)
 			queries, err := scanQueries(cfg)
 			if err != nil {
 				return err

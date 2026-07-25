@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -31,19 +32,46 @@ func overviewCmd() *cobra.Command {
 				return err
 			}
 
+			maxAge, err := cfg.Cache.MaxAgeDuration()
+			if err != nil {
+				return err
+			}
+			now := time.Now().UTC()
+
 			for i := range cfg.Databases {
 				db := &cfg.Databases[i]
 				summary := types.DatabaseSummary{
 					Name: db.Name, Engine: db.Engine, Host: db.Host,
 				}
 
+				// Connected has to mean "answered just now". Pinging costs one
+				// short dial per configured database (pingTimeout), which is
+				// the price of the field being true only when it's true.
+				var problems []string
+				if err := pingDatabase(db); err != nil {
+					problems = append(problems, "connect failed: "+err.Error())
+				} else {
+					summary.Connected = true
+				}
+
 				entry, err := store.Load(db.Name)
 				if err != nil || entry == nil {
-					summary.Error = "no snapshot — run 'rivet schema refresh'"
+					problems = append(problems, "no snapshot — run 'rivet schema refresh'")
+					summary.Error = strings.Join(problems, "; ")
 					ov.Databases = append(ov.Databases, summary)
 					continue
 				}
-				summary.Connected = true
+
+				if !entry.FetchedAt.IsZero() {
+					summary.SnapshotFetchedAt = entry.FetchedAt.Format(time.RFC3339)
+				}
+				summary.SnapshotAge = humanAge(entry.Age(now))
+				summary.SnapshotStale = entry.IsStale(now, maxAge)
+				if summary.SnapshotStale {
+					problems = append(problems, "snapshot is stale — run 'rivet schema refresh'")
+				}
+				summary.Error = strings.Join(problems, "; ")
+
 				if entry.Schema != nil {
 					summary.Tables = len(entry.Schema.Tables)
 					summary.Views = len(entry.Schema.Views)
@@ -78,17 +106,23 @@ func printOverviewHuman(cmd *cobra.Command, ov *types.Overview) {
 	w := cmd.OutOrStdout()
 	fmt.Fprintln(w, "Databases:")
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "  NAME\tENGINE\tHOST\tSTATUS\tTABLES\tINDEXES")
+	fmt.Fprintln(tw, "  NAME\tENGINE\tHOST\tSTATUS\tSNAPSHOT\tTABLES\tINDEXES\tNOTE")
 	for _, d := range ov.Databases {
-		status := "connected"
-		if !d.Connected {
-			status = "offline"
-			if d.Error != "" {
-				status = d.Error
+		status := "offline"
+		if d.Connected {
+			status = "connected"
+		}
+		// Counts come from the snapshot, so its age is shown next to them
+		// rather than left to be inferred from STATUS.
+		snap := "none"
+		if d.SnapshotAge != "" {
+			snap = d.SnapshotAge + " old"
+			if d.SnapshotStale {
+				snap += " (STALE)"
 			}
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%d\t%d\n",
-			d.Name, d.Engine, d.Host, status, d.Tables, d.Indexes)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n",
+			d.Name, d.Engine, d.Host, status, snap, d.Tables, d.Indexes, d.Error)
 	}
 	tw.Flush()
 
@@ -102,5 +136,3 @@ func printOverviewHuman(cmd *cobra.Command, ov *types.Overview) {
 		fmt.Fprintln(w)
 	}
 }
-
-var _ = strings.Index

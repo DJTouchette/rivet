@@ -58,7 +58,7 @@ If --db is passed only that database is refreshed.`,
 					fmt.Fprintf(w, "  %s: connect failed — %v\n", db.Name, err)
 					continue
 				}
-				entry, err := pullSnapshot(cat, db)
+				entry, err := pullSnapshot(cat, db, defaultSlowQueryLimit)
 				cat.Close()
 				if err != nil {
 					fmt.Fprintf(w, "  %s: refresh failed — %v\n", db.Name, err)

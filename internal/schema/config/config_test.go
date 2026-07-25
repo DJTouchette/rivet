@@ -1,8 +1,11 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/djtouchette/rivet/internal/schema/types"
 )
@@ -132,6 +135,82 @@ func TestResolveDatabase(t *testing.T) {
 	single := &Config{Databases: []Database{{Name: "only", Engine: types.EnginePostgres}}}
 	if d, err := single.ResolveDatabase(""); err != nil || d.Name != "only" {
 		t.Errorf("single db should resolve without --db; got %v / %v", d, err)
+	}
+}
+
+func TestCacheMaxAgeDuration(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"unset falls back to the default TTL", "", DefaultCacheMaxAge, false},
+		{"whitespace is treated as unset", "   ", DefaultCacheMaxAge, false},
+		{"explicit override", "30m", 30 * time.Minute, false},
+		{"surrounding whitespace tolerated", " 12h ", 12 * time.Hour, false},
+		// 0s is a supported setting meaning "never read from cache", so it must
+		// parse rather than collapse into the default.
+		{"zero is honoured, not defaulted", "0s", 0, false},
+		// A typo'd TTL must be loud: silently defaulting would reintroduce the
+		// staleness the setting exists to prevent.
+		{"garbage is an error", "24 hours", 0, true},
+		{"days are not a Go duration unit", "7d", 0, true},
+		{"negative is an error", "-1h", 0, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := CacheConfig{MaxAge: c.in}.MaxAgeDuration()
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("MaxAgeDuration(%q) = %v, want error", c.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("MaxAgeDuration(%q): %v", c.in, err)
+			}
+			if got != c.want {
+				t.Errorf("MaxAgeDuration(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// The TTL is configured under schema.cache in .rivet/config.yaml, so it has to
+// survive the same wrapper unwrapping as the rest of the section.
+func TestLoadCacheSection(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := "schema:\n  cache:\n    max_age: 90m\n  databases:\n    - name: prod\n      engine: postgres\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got, err := cfg.Cache.MaxAgeDuration()
+	if err != nil {
+		t.Fatalf("MaxAgeDuration: %v", err)
+	}
+	if got != 90*time.Minute {
+		t.Errorf("schema.cache.max_age = %v, want 90m", got)
+	}
+
+	// A config with no cache section still gets the default.
+	bare := filepath.Join(dir, "bare.yaml")
+	if err := os.WriteFile(bare, []byte("schema:\n  databases: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = Load(bare)
+	if err != nil {
+		t.Fatalf("Load(bare): %v", err)
+	}
+	if got, _ := cfg.Cache.MaxAgeDuration(); got != DefaultCacheMaxAge {
+		t.Errorf("missing cache section = %v, want default %v", got, DefaultCacheMaxAge)
 	}
 }
 

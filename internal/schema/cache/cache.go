@@ -23,6 +23,35 @@ type Entry struct {
 	IndexUsage []types.IndexUsage `json:"index_usage,omitempty"`
 	Hints      []types.MissingIndexHint `json:"hints,omitempty"`
 	SlowQueries []types.SlowQuery `json:"slow_queries,omitempty"`
+
+	// SlowQueryLimit is the row cap SlowQueries was captured with. Stored so a
+	// later request for *more* rows than were ever fetched can tell the
+	// difference between "the server had no more" and "we never asked".
+	SlowQueryLimit int `json:"slow_query_limit,omitempty"`
+}
+
+// Age reports how long ago the snapshot was taken, relative to now.
+func (e *Entry) Age(now time.Time) time.Duration {
+	if e == nil || e.FetchedAt.IsZero() {
+		return 0
+	}
+	d := now.Sub(e.FetchedAt)
+	if d < 0 {
+		// Clock skew (or a snapshot copied from another machine). Treat the
+		// future as "just fetched" rather than reporting a negative age.
+		return 0
+	}
+	return d
+}
+
+// IsStale reports whether the snapshot has outlived maxAge. A snapshot with no
+// FetchedAt is always stale: an unknown age is not a safe age. maxAge of 0
+// means nothing cached is ever fresh.
+func (e *Entry) IsStale(now time.Time, maxAge time.Duration) bool {
+	if e == nil || e.FetchedAt.IsZero() {
+		return true
+	}
+	return e.Age(now) >= maxAge
 }
 
 // Store is a filesystem-backed cache. Zero value is unusable — call Open.

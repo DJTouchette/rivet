@@ -45,9 +45,15 @@ func TestUntaggedThemeCatchesSubjectMissingFromTags(t *testing.T) {
 	doc := &Document{
 		Name: "search-indexer", Kind: KindModule, Title: "Search Index Pipeline",
 		Tags: []string{"search", "index", "backfill"},
+		// The term has to clear themeMinOccurrences, which is deliberately high:
+		// a subject a doc genuinely dwells on gets mentioned a lot, and that is
+		// exactly what separates it from a passing reference.
 		Body: "# Pipeline\n\nAnalyzer changes silently alter relevance. " +
 			"A relevance shift after an analyzer edit is the usual cause. " +
-			"Re-check relevance whenever the analyzer or its relevance weights move.",
+			"Re-check relevance whenever the analyzer or its relevance weights move. " +
+			"Relevance is scored per shard, so a relevance regression in one shard " +
+			"skews relevance overall; compare relevance before and after, and treat " +
+			"any relevance delta beyond the noise floor as a relevance bug.",
 	}
 	docs := append([]*Document{doc}, filler(8)...)
 

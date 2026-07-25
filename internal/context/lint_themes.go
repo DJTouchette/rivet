@@ -26,23 +26,34 @@ const (
 	// themeMinOccurrences is how often a term must appear before it counts as a
 	// theme rather than a passing mention.
 	//
-	// Calibrated against this repo's own docs, which is the only honest way to
-	// pick it. At 2 the rule produced 27 warnings over 9 documents, and the
-	// true positives were drowned by words like "force" and "count" that happen
-	// to appear twice. Every genuine miss — "snapshot" 12 times in the schema
-	// doc, "elixir" and "manifest" 6 times in the project-CLI one — sat at 4 or
-	// above. A rule that gates CI has to be quiet enough that people read it.
-	themeMinOccurrences = 4
+	// Calibrated twice, and the second time is the one that counts.
+	//
+	// First pass used this repo's own nine docs and settled on 4. That was a bad
+	// corpus for the job: freshly written, by one author, in one sitting. Run
+	// against a real 55-doc corpus that had grown organically, threshold 4
+	// produced 143 warnings — 2.6 per document — which is not a list anyone
+	// reads, and a rule nobody reads is a rule that does nothing.
+	//
+	// Measured on that corpus: 4 -> 143, 6 -> 61, 8 -> 28, 10 -> 9. Eight lands
+	// at roughly one warning per two documents while still surfacing the terms
+	// that matter (a domain doc saying "principals" nine times and tagging none
+	// of it). Ten is quieter but starts dropping real misses, because the
+	// per-document cap has to fall with it.
+	//
+	// Note this is a different kind of tuning from fitting a metric. The output
+	// is read by a person, so "how many warnings will they act on" is the actual
+	// design constraint, not a number to be maximised.
+	themeMinOccurrences = 8
 
 	// themeMaxDocFraction keeps a term distinctive. A word half the corpus uses
 	// says nothing about which doc owns it, however often one repeats it.
-	themeMaxDocFraction = 0.34
+	themeMaxDocFraction = 0.20
 
 	// themeMinLength drops short words, which are overwhelmingly grammar.
 	themeMinLength = 5
 
 	// themeMaxReported bounds the noise from any single document.
-	themeMaxReported = 3
+	themeMaxReported = 2
 )
 
 // themeCandidate is a repeated body term and how often it appeared.

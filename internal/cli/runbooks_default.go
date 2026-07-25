@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,6 +72,13 @@ func ensureRunbooks() ([]string, error) {
 		switch {
 		case readErr == nil && string(current) == string(want):
 			actions = append(actions, fmt.Sprintf("%s already current, skipped", path))
+		case readErr == nil && isSupersededRunbook(name, current):
+			// Not a local edit — an older copy rivet itself wrote. There is
+			// nothing of the user's to lose, so update it.
+			if err := os.WriteFile(path, want, 0644); err != nil {
+				return nil, fmt.Errorf("writing %s: %w", path, err)
+			}
+			actions = append(actions, fmt.Sprintf("%s updated to the current version (yours was unmodified)", path))
 		case readErr == nil:
 			actions = append(actions, fmt.Sprintf(
 				"%s differs from the version rivet ships (yours: %s) — left as-is",
@@ -82,6 +91,44 @@ func ensureRunbooks() ([]string, error) {
 		}
 	}
 	return actions, nil
+}
+
+// supersededRunbooks maps a runbook file name to the SHA-256 digests of every
+// version rivet has previously shipped.
+//
+// "Differs from what rivet ships" conflates two situations that need opposite
+// handling: a team edited the runbook (must be preserved), or the project was
+// initialised before rivet improved it and has been carrying the old copy ever
+// since (should just be updated — there is nothing of theirs in it). Without
+// this list both look identical, so an unmodified stale copy would be reported
+// forever and never fixed, which is the skip-if-exists bug wearing a hat.
+//
+// Add the outgoing digest here whenever a shipped runbook changes:
+//
+//	git show <commit>:internal/cli/runbooks/<name> | sha256sum
+var supersededRunbooks = map[string][]string{
+	// The ONNX-first version, replaced when the procedure was rewritten to
+	// lead with Ollama.
+	"setup-semantic-search.md": {
+		"ee42b3d14026109ab89888e8376ef1d035ec3bf61b4e129bb04ae61c751f29fc",
+	},
+}
+
+// isSupersededRunbook reports whether content is byte-identical to a version
+// rivet shipped previously, and so carries no local changes.
+func isSupersededRunbook(name string, content []byte) bool {
+	sum := hex.EncodeToString(sha256Sum(content))
+	for _, known := range supersededRunbooks[name] {
+		if sum == known {
+			return true
+		}
+	}
+	return false
+}
+
+func sha256Sum(b []byte) []byte {
+	h := sha256.Sum256(b)
+	return h[:]
 }
 
 // runbookStamp summarises an on-disk runbook for the "yours differs" message,

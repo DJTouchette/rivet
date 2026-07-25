@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +109,77 @@ func TestEnsureRunbooks_KeepsLocalEditsAndReportsDrift(t *testing.T) {
 	}
 	if !reported {
 		t.Errorf("local edit was not reported back to the user; actions = %v", actions)
+	}
+}
+
+// "Differs from what rivet ships" covers two opposite cases. A copy that
+// matches a version rivet shipped previously carries none of the user's work,
+// so leaving it in place forever is just skip-if-exists again — found in the
+// wild on a project still carrying the ONNX-first setup procedure months after
+// it was rewritten.
+func TestEnsureRunbooks_UpdatesUnmodifiedOldVersions(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	dir := filepath.Join(".rivet", "runbooks")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "setup-semantic-search.md")
+
+	// Any content whose digest is registered as superseded stands in for "an
+	// older copy rivet itself wrote".
+	old := []byte("stale but rivet's own\n")
+	sum := sha256.Sum256(old)
+	supersededRunbooks["setup-semantic-search.md"] = append(
+		supersededRunbooks["setup-semantic-search.md"], hex.EncodeToString(sum[:]))
+	t.Cleanup(func() {
+		s := supersededRunbooks["setup-semantic-search.md"]
+		supersededRunbooks["setup-semantic-search.md"] = s[:len(s)-1]
+	})
+
+	if err := os.WriteFile(path, old, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	actions, err := ensureRunbooks()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) == string(old) {
+		t.Error("an unmodified old version should have been updated")
+	}
+
+	var reported bool
+	for _, a := range actions {
+		if strings.Contains(a, "setup-semantic-search.md") && strings.Contains(a, "updated") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Errorf("update was not reported; actions = %v", actions)
+	}
+}
+
+// The digests in supersededRunbooks must name versions that are genuinely
+// superseded. Listing the current one would make rivet overwrite a file with
+// itself and report an update that did not happen.
+func TestSupersededDigestsAreNotCurrent(t *testing.T) {
+	for name, digests := range supersededRunbooks {
+		want, err := defaultRunbooks.ReadFile("runbooks/" + name)
+		if err != nil {
+			t.Errorf("supersededRunbooks names %q, which rivet does not ship", name)
+			continue
+		}
+		cur := sha256.Sum256(want)
+		for _, d := range digests {
+			if d == hex.EncodeToString(cur[:]) {
+				t.Errorf("%s: the currently shipped version is listed as superseded", name)
+			}
+		}
 	}
 }

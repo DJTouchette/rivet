@@ -6,8 +6,8 @@ package witness
 
 import (
 	"bytes"
-	"path/filepath"
 
+	"github.com/djtouchette/rivet/internal/recon"
 	witnessapp "github.com/djtouchette/witness/pkg/embedded"
 )
 
@@ -20,9 +20,8 @@ import (
 func Run(args []string) (stdout, stderr string, exitCode int, err error) {
 	cmd := witnessapp.NewCommand("embedded")
 
-	// Use rivet's recon cache directory.
-	cacheDir := filepath.Join(".rivet", "recon")
-	fullArgs := append([]string{"--cache-dir", cacheDir}, args...)
+	// Use rivet's recon cache directory (shared with the recon adapter).
+	fullArgs := append([]string{"--cache-dir", recon.CacheDir()}, args...)
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.SetOut(&outBuf)

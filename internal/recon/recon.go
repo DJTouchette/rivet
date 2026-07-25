@@ -11,6 +11,16 @@ import (
 	reconapp "github.com/djtouchette/recon/pkg/embedded"
 )
 
+// CacheDir returns the recon cache directory rivet uses, relative to the repo
+// root. Every rivet entry point that drives recon or witness — the MCP
+// adapters and the `rivet recon` / `rivet witness` CLI subtrees — must point at
+// this one directory. Recon's own default is <root>/.recon/, so any path that
+// forgets to override it silently builds and maintains a second index that the
+// other paths never read.
+func CacheDir() string {
+	return filepath.Join(".rivet", "recon")
+}
+
 // Run executes a recon command in-process and captures its output.
 // The args slice should contain the subcommand and its arguments
 // (e.g. ["overview"] or ["symbols", "auth"]).
@@ -21,8 +31,7 @@ func Run(args []string) (stdout, stderr string, exitCode int, err error) {
 	cmd := reconapp.NewCommand("embedded")
 
 	// Store cache inside .rivet/ instead of creating a separate .recon/.
-	cacheDir := filepath.Join(".rivet", "recon")
-	fullArgs := append([]string{"--cache-dir", cacheDir}, args...)
+	fullArgs := append([]string{"--cache-dir", CacheDir()}, args...)
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.SetOut(&outBuf)

@@ -13,8 +13,10 @@ import (
 	"github.com/djtouchette/rivet/internal/policy"
 	"github.com/djtouchette/rivet/internal/projectcli"
 	"github.com/djtouchette/rivet/internal/recon"
+	"github.com/djtouchette/rivet/internal/schema"
 	schemaconfig "github.com/djtouchette/rivet/internal/schema/config"
 	"github.com/djtouchette/rivet/internal/vaulty"
+	"github.com/djtouchette/rivet/internal/witness"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -413,10 +415,7 @@ Examples:
 					capName, policy.FormatViolations(violations))
 			}
 
-			executor := capabilities.NewExecutor(reg)
-			executor.RegisterInProcess("vaulty", vaulty.Run)
-			executor.RegisterInProcess("recon", recon.Run)
-			res, err := executor.Run(context.Background(), capName, extraArgs, approve)
+			res, err := newExecutor(reg).Run(context.Background(), capName, extraArgs, approve)
 			if err != nil {
 				return err
 			}
@@ -443,6 +442,24 @@ Examples:
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output result as JSON (includes stdout, stderr, exit code)")
 
 	return cmd
+}
+
+// newExecutor builds the capability executor every rivet entry point uses.
+//
+// The in-process runner table is the only thing standing between a builtin and
+// os/exec: Executor.RunCapability silently falls back to exec.Command when
+// Command[0] has no registered runner, so a missing entry turns `witness.select`
+// into a hunt for a `witness` binary that rivet never installs. Registering the
+// runners here — instead of once per command — is what keeps the MCP path
+// (`rivet serve`) and the CLI path (`rivet project run`) from drifting apart.
+// Every capability with Builtin: true must have its Command[0] covered here.
+func newExecutor(reg *capabilities.Registry) *capabilities.Executor {
+	exec := capabilities.NewExecutor(reg)
+	exec.RegisterInProcess("vaulty", vaulty.Run)
+	exec.RegisterInProcess("recon", recon.Run)
+	exec.RegisterInProcess("witness", witness.Run)
+	exec.RegisterInProcess("schema", schema.Run)
+	return exec
 }
 
 // buildPolicies converts config policy definitions to policy.Rule values.

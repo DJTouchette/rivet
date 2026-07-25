@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 
-	"github.com/djtouchette/rivet/internal/capabilities"
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
 	"github.com/djtouchette/rivet/internal/context/semantic"
@@ -13,9 +12,6 @@ import (
 	"github.com/djtouchette/rivet/internal/pins"
 	"github.com/djtouchette/rivet/internal/rally"
 	"github.com/djtouchette/rivet/internal/recon"
-	"github.com/djtouchette/rivet/internal/schema"
-	"github.com/djtouchette/rivet/internal/vaulty"
-	"github.com/djtouchette/rivet/internal/witness"
 	"github.com/spf13/cobra"
 )
 
@@ -46,11 +42,7 @@ Configure Claude Code to use this server by adding to your MCP settings:
 
 			reg := buildRegistry(cfg)
 
-			exec := capabilities.NewExecutor(reg)
-			exec.RegisterInProcess("vaulty", vaulty.Run)
-			exec.RegisterInProcess("recon", recon.Run)
-			exec.RegisterInProcess("witness", witness.Run)
-			exec.RegisterInProcess("schema", schema.Run)
+			exec := newExecutor(reg)
 
 			contexts, err := rivetctx.Load(".rivet/context")
 			if err != nil {

@@ -46,6 +46,14 @@ func (e *Executor) RegisterInProcess(name string, runner InProcessRunner) {
 	e.inProcRunners[name] = runner
 }
 
+// HasInProcess reports whether an in-process runner is registered for the given
+// Command[0]. RunCapability falls back to os/exec when one is missing, which
+// for a builtin means shelling out to a binary rivet doesn't ship; callers use
+// this to assert up front that every builtin is actually runnable.
+func (e *Executor) HasInProcess(name string) bool {
+	_, ok := e.inProcRunners[name]
+	return ok
+}
 
 // Run looks up the named capability and executes it with the given extra args.
 // For dangerous capabilities, approved must be true or ErrDangerousNoApprove is returned.

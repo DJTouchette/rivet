@@ -13,7 +13,8 @@ func newUpdateCmd() *cobra.Command {
 		Long: `Bring an existing Rivet project up to date without overwriting .rivet/config.yaml.
 
 This command creates any missing Rivet directories and installs missing MCP config,
-Claude hooks, skills, and subagents. Existing files are preserved.`,
+skills, and subagents. Existing files are preserved. It also retires the bash nudge
+hooks older versions installed — nudging now comes from the MCP server itself.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			actions, err := ensureProjectSetup(false)
 			if err != nil {

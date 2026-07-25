@@ -7,201 +7,174 @@ import (
 	"path/filepath"
 )
 
-// ensureHooks adds rivet hooks to .claude/settings.json.
-// Non-destructive: preserves existing settings and only adds rivet hooks.
-func ensureHooks() (string, error) {
-	path := filepath.Join(".claude", "settings.json")
+// Rivet used to ship two bash hooks — .rivet/hooks/learn-nudge.sh and
+// compact-check.sh — that inferred agent state by grepping Claude Code's
+// transcript JSONL. That approach was wrong twice over.
+//
+// It was wrong in principle: rivet is the MCP server, so it already observes
+// every tool call directly. Reconstructing that from an undocumented transcript
+// format owned by another tool is guesswork that breaks silently whenever the
+// format shifts, and logic living inside a Go string literal can't be tested.
+//
+// It was also wrong in practice. The scripts counted calls with
+// `grep -cE "recon\.(grep|search|...)"` — an escaped literal dot — while the
+// transcript records the sanitized MCP name `recon_grep`, so the pattern never
+// matched. The count then ran through `grep -c ... || echo 0`, which yields the
+// two-line string "0\n0" because grep -c prints 0 *and* exits 1 on no match,
+// making the `-lt` comparison abort. The two bugs cancelled into the opposite
+// of the intended behavior: the "only nudge after 2+ investigations" throttle
+// never engaged, so the nudge fired on the first recon call of every session.
+//
+// The MCP server does all of this properly and under test — see
+// contextFirstMessage, learnNudgeMessage and promoteMessage in internal/mcp.
+// It tracks recon calls in session state, suppresses the context-first nudge
+// once rivet.context-show is called, resets the counter on rivet.learn, and
+// counts real un-promoted files for the promotion nudge.
+//
+// So the hooks are gone. removeLegacyHooks cleans them out of projects that ran
+// an older `rivet init`; leaving them behind would double-nudge on every call.
 
-	if err := os.MkdirAll(".claude", 0755); err != nil {
-		return "", fmt.Errorf("creating .claude/: %w", err)
-	}
+// legacyHookScripts are the hook scripts older versions of rivet wrote into
+// .rivet/hooks/.
+var legacyHookScripts = []string{"learn-nudge.sh", "compact-check.sh"}
 
-	// Write hook scripts.
+// removeLegacyHooks deletes the retired bash nudge hooks and unregisters them
+// from .claude/settings.json. It is non-destructive: hooks rivet didn't install
+// are preserved, and unrelated settings are untouched. Safe to run repeatedly
+// and on projects that never had the hooks.
+func removeLegacyHooks() (string, error) {
 	scriptDir := filepath.Join(".rivet", "hooks")
-	if err := os.MkdirAll(scriptDir, 0755); err != nil {
-		return "", fmt.Errorf("creating hooks dir: %w", err)
-	}
 
-	scripts := []struct {
-		name    string
-		content string
-	}{
-		{"learn-nudge.sh", learnNudgeScript},
-		{"compact-check.sh", compactCheckScript},
-	}
-	for _, s := range scripts {
-		p := filepath.Join(scriptDir, s.name)
-		if err := os.WriteFile(p, []byte(s.content), 0755); err != nil {
-			return "", fmt.Errorf("writing %s: %w", p, err)
+	var removedScripts int
+	for _, name := range legacyHookScripts {
+		path := filepath.Join(scriptDir, name)
+		err := os.Remove(path)
+		switch {
+		case err == nil:
+			removedScripts++
+		case os.IsNotExist(err):
+			// Already gone — nothing to do.
+		default:
+			return "", fmt.Errorf("removing %s: %w", path, err)
 		}
 	}
 
-	// Load or create settings.json.
+	// Drop .rivet/hooks/ once it's empty, so the retired concept leaves no
+	// trace. A non-empty dir means the user put something there; leave it.
+	if entries, err := os.ReadDir(scriptDir); err == nil && len(entries) == 0 {
+		os.Remove(scriptDir)
+	}
+
+	unregistered, err := unregisterLegacyHooks(filepath.Join(".claude", "settings.json"))
+	if err != nil {
+		return "", err
+	}
+
+	if removedScripts == 0 && unregistered == 0 {
+		return "no legacy hooks to remove", nil
+	}
+	return fmt.Sprintf("removed %d legacy hook script(s) and %d settings entry(ies) — nudges now come from the MCP server", removedScripts, unregistered), nil
+}
+
+// unregisterLegacyHooks removes rivet's retired hook commands from a Claude
+// Code settings file, returning how many entries it dropped. A missing file is
+// not an error.
+func unregisterLegacyHooks(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("reading %s: %w", path, err)
+	}
+
 	var settings map[string]interface{}
-	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return "", fmt.Errorf("parsing %s: %w", path, err)
-		}
-	}
-	if settings == nil {
-		settings = make(map[string]interface{})
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return 0, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
 	hooks, _ := settings["hooks"].(map[string]interface{})
 	if hooks == nil {
-		hooks = make(map[string]interface{})
+		return 0, nil
 	}
 
-	// Check if already configured.
-	if hasRivetHook(hooks, "PostToolUse", ".rivet/hooks/learn-nudge.sh") &&
-		hasRivetHook(hooks, "PostToolUse", ".rivet/hooks/compact-check.sh") {
-		return "rivet hooks already configured", nil
+	// Older rivet versions registered these under PostToolUse, and one even
+	// earlier version used Stop. Sweep every event so no stale copy survives.
+	var removed int
+	for _, name := range legacyHookScripts {
+		command := filepath.Join(".rivet", "hooks", name)
+		for event := range hooks {
+			removed += removeRivetHook(hooks, event, command)
+		}
 	}
 
-	// Remove old Stop hook if it exists.
-	removeRivetHook(hooks, "Stop", ".rivet/hooks/learn-nudge.sh")
+	if removed == 0 {
+		return 0, nil
+	}
 
-	// Add PostToolUse hook for learn nudge — fires after MCP recon tool calls.
-	// Matcher uses pipe-separated tool names to match recon tools.
-	addHook(hooks, "PostToolUse", "mcp__rivet__recon_grep|mcp__rivet__recon_search|mcp__rivet__recon_related|mcp__rivet__recon_context|mcp__rivet__recon_symbols", ".rivet/hooks/learn-nudge.sh")
+	if len(hooks) == 0 {
+		delete(settings, "hooks")
+	} else {
+		settings["hooks"] = hooks
+	}
 
-	// Add PostToolUse hook for compact check — fires after rivet.learn calls.
-	addHook(hooks, "PostToolUse", "mcp__rivet__rivet_learn", ".rivet/hooks/compact-check.sh")
-
-	settings["hooks"] = hooks
-
-	data, err := json.MarshalIndent(settings, "", "  ")
+	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return "", fmt.Errorf("marshaling settings: %w", err)
+		return 0, fmt.Errorf("marshaling settings: %w", err)
 	}
-	data = append(data, '\n')
+	out = append(out, '\n')
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return "", fmt.Errorf("writing %s: %w", path, err)
+	if err := os.WriteFile(path, out, 0644); err != nil {
+		return 0, fmt.Errorf("writing %s: %w", path, err)
 	}
-
-	return "added rivet hooks (learn-nudge + compact-check)", nil
+	return removed, nil
 }
 
-func hasRivetHook(hooks map[string]interface{}, event, command string) bool {
-	entries, _ := hooks[event].([]interface{})
+// removeRivetHook strips every hook entry matching command from one event,
+// returning the number removed. Entries holding other commands keep those, and
+// an event left with no entries is deleted outright.
+func removeRivetHook(hooks map[string]interface{}, event, command string) int {
+	entries, ok := hooks[event].([]interface{})
+	if !ok {
+		return 0
+	}
+
+	var removed int
+	kept := make([]interface{}, 0, len(entries))
 	for _, entry := range entries {
-		em, _ := entry.(map[string]interface{})
-		innerHooks, _ := em["hooks"].([]interface{})
+		em, ok := entry.(map[string]interface{})
+		if !ok {
+			kept = append(kept, entry)
+			continue
+		}
+		innerHooks, ok := em["hooks"].([]interface{})
+		if !ok {
+			kept = append(kept, entry)
+			continue
+		}
+
+		keptInner := make([]interface{}, 0, len(innerHooks))
 		for _, ih := range innerHooks {
 			ihm, _ := ih.(map[string]interface{})
 			if cmd, _ := ihm["command"].(string); cmd == command {
-				return true
+				removed++
+				continue
 			}
+			keptInner = append(keptInner, ih)
 		}
-	}
-	return false
-}
 
-func removeRivetHook(hooks map[string]interface{}, event, command string) {
-	entries, _ := hooks[event].([]interface{})
-	var kept []interface{}
-	for _, entry := range entries {
-		em, _ := entry.(map[string]interface{})
-		innerHooks, _ := em["hooks"].([]interface{})
-		var keptInner []interface{}
-		for _, ih := range innerHooks {
-			ihm, _ := ih.(map[string]interface{})
-			if cmd, _ := ihm["command"].(string); cmd != command {
-				keptInner = append(keptInner, ih)
-			}
-		}
+		// An entry whose only hook was ours goes away with it; one that still
+		// has hooks keeps its matcher and the survivors.
 		if len(keptInner) > 0 {
 			em["hooks"] = keptInner
 			kept = append(kept, em)
 		}
 	}
+
 	if len(kept) > 0 {
 		hooks[event] = kept
 	} else {
 		delete(hooks, event)
 	}
+	return removed
 }
-
-func addHook(hooks map[string]interface{}, event, matcher, command string) {
-	entries, _ := hooks[event].([]interface{})
-	entries = append(entries, map[string]interface{}{
-		"matcher": matcher,
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": command,
-			},
-		},
-	})
-	hooks[event] = entries
-}
-
-// learnNudgeScript fires after recon MCP tool calls.
-// Checks the transcript for prior recon usage without a rivet.learn call.
-// Outputs additionalContext that Claude sees and can act on.
-const learnNudgeScript = `#!/bin/bash
-# Rivet learn nudge — fires after recon MCP tool calls.
-# If Claude has used multiple recon tools but hasn't called rivet.learn,
-# nudge it to record findings.
-
-input=$(cat)
-
-# Extract transcript_path.
-transcript_path=""
-if command -v jq >/dev/null 2>&1; then
-  transcript_path=$(echo "$input" | jq -r '.transcript_path // empty' 2>/dev/null)
-elif command -v python3 >/dev/null 2>&1; then
-  transcript_path=$(echo "$input" | python3 -c "import sys,json; print(json.load(sys.stdin).get('transcript_path',''))" 2>/dev/null)
-fi
-
-if [ -z "$transcript_path" ] || [ ! -f "$transcript_path" ]; then
-  exit 0
-fi
-
-# Count recon tool calls in this session.
-recon_count=$(grep -cE "recon\.(grep|search|related|context|symbols)" "$transcript_path" 2>/dev/null || echo 0)
-
-# Only nudge after 2+ recon calls (indicates real investigation, not a quick lookup).
-if [ "$recon_count" -lt 2 ]; then
-  exit 0
-fi
-
-# Check if rivet.learn was already called.
-if grep -q "rivet\.learn" "$transcript_path" 2>/dev/null; then
-  exit 0
-fi
-
-# Output nudge as additionalContext so Claude sees it.
-echo "If you've discovered anything non-obvious during this investigation (hidden dependencies, performance traps, implicit ordering, gotchas), call rivet.learn with a title and observation. The entry lands in .rivet/learnings/ and is later promoted into a context doc."
-`
-
-// compactCheckScript fires after any rivet MCP call.
-// Checks if the learning log has grown past the promotion threshold.
-const compactCheckScript = `#!/bin/bash
-# Rivet compact check — fires after rivet MCP tool calls.
-# If un-promoted learnings exceed threshold, nudge to promote.
-
-LEARNING_THRESHOLD=10
-
-if [ ! -d ".rivet/learnings" ]; then
-  exit 0
-fi
-
-# Count *.md files directly under .rivet/learnings/ (exclude archive/) that
-# are not already marked as promoted.
-total=0
-promoted=0
-for f in .rivet/learnings/*.md; do
-  [ -f "$f" ] || continue
-  total=$((total+1))
-  if grep -q "^promoted: true" "$f" 2>/dev/null; then
-    promoted=$((promoted+1))
-  fi
-done
-active=$((total-promoted))
-
-if [ "$active" -ge "$LEARNING_THRESHOLD" ]; then
-  echo "Learning log has ${active} active entries (threshold: ${LEARNING_THRESHOLD}). Run /rivet-promote-learnings to review, merge, and promote high-value entries into context docs."
-fi
-`

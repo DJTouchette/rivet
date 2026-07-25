@@ -121,6 +121,9 @@ func ensureProjectSetup(force bool) ([]string, error) {
 		filepath.Join(rivetDir, "wiki"),
 		filepath.Join(rivetDir, "runbooks"),
 		filepath.Join(rivetDir, "capabilities"),
+		// rivet.learn creates this lazily, but scaffolding it up front makes
+		// the learning log discoverable before the first entry exists.
+		filepath.Join(rivetDir, "learnings"),
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -157,9 +160,11 @@ func ensureProjectSetup(force bool) ([]string, error) {
 	}
 	actions = append(actions, agentActions...)
 
-	hookAction, err := ensureHooks()
+	// Nudging lives in the MCP server now; clear out the bash hooks that
+	// older versions installed so they don't double-nudge.
+	hookAction, err := removeLegacyHooks()
 	if err != nil {
-		return nil, fmt.Errorf("installing hooks: %w", err)
+		return nil, fmt.Errorf("removing legacy hooks: %w", err)
 	}
 	actions = append(actions, hookAction)
 

@@ -12,6 +12,7 @@ import (
 type Config struct {
 	ProjectCLI   ProjectCLIConfig `yaml:"project_cli,omitempty"`
 	Context      ContextConfig    `yaml:"context,omitempty"`
+	Tools        ToolsConfig      `yaml:"tools,omitempty"`
 	Capabilities []CapabilityDef  `yaml:"capabilities,omitempty"`
 	Policies     []PolicyDef      `yaml:"policies,omitempty"`
 
@@ -41,6 +42,34 @@ func (c ContextConfig) ShouldAutoCompact() bool {
 		return true
 	}
 	return *c.AutoCompact
+}
+
+// ToolsConfig is the escape hatch for built-in tool groups that are otherwise
+// registered only when rivet can detect the feature is in use. Each field is
+// tri-state — unset means auto-detect, true forces the group on, false forces
+// it off. Detection reads project state (a configured database, an existing
+// vault), and a user may legitimately want the tools before that state exists,
+// or never want them at all.
+type ToolsConfig struct {
+	Schema *bool `yaml:"schema,omitempty"`
+	Vaulty *bool `yaml:"vaulty,omitempty"`
+}
+
+// SchemaEnabled resolves the schema.* group against the auto-detected signal.
+func (t ToolsConfig) SchemaEnabled(detected bool) bool {
+	return resolveToolGroup(t.Schema, detected)
+}
+
+// VaultyEnabled resolves the vaulty.* group against the auto-detected signal.
+func (t ToolsConfig) VaultyEnabled(detected bool) bool {
+	return resolveToolGroup(t.Vaulty, detected)
+}
+
+func resolveToolGroup(override *bool, detected bool) bool {
+	if override == nil {
+		return detected
+	}
+	return *override
 }
 
 // ProjectCLIConfig describes the project-local CLI binary.
@@ -161,6 +190,15 @@ func StarterConfigYAML() []byte {
 #   wiki_paths:
 #     - "../project.wiki/**"
 #     - "docs/**"
+
+# Tools — which built-in tool groups Rivet exposes over MCP.
+# recon.* and witness.* are always on. schema.* and vaulty.* are registered only
+# when Rivet detects you use them (a schema: section below / an existing vault),
+# so a project that uses neither spends no context window on their definitions.
+# Set either to true to force it on, or false to force it off.
+# tools:
+#   schema: true
+#   vaulty: false
 
 # Project CLI — the repo-local CLI that exposes project-specific operations.
 # Uncomment and set the path to your project CLI binary.

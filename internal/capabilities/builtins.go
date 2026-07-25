@@ -1,5 +1,34 @@
 package capabilities
 
+import "strings"
+
+// BuiltinGroups selects which optional builtin groups a project gets.
+// recon.* and witness.* have no switch here on purpose: they need no
+// configuration and work in any git repo, so they are never gated.
+type BuiltinGroups struct {
+	Schema bool
+	Vaulty bool
+}
+
+// BuiltinsFor returns Builtins() minus the optional groups this project isn't
+// set up for. Every tool definition is spent context window in the MCP tool
+// list before any work starts, so a repo with no database configured should not
+// pay for twelve schema.* definitions whose every call would fail anyway.
+func BuiltinsFor(g BuiltinGroups) []Capability {
+	all := Builtins()
+	out := make([]Capability, 0, len(all))
+	for _, c := range all {
+		if strings.HasPrefix(c.Name, "schema.") && !g.Schema {
+			continue
+		}
+		if strings.HasPrefix(c.Name, "vaulty.") && !g.Vaulty {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // Builtins returns capabilities that are always available in rivet,
 // regardless of project config. Vaulty and recon capabilities run
 // in-process via their embedded dependencies.

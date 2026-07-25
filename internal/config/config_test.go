@@ -171,3 +171,69 @@ func TestStarterConfigYAML(t *testing.T) {
 		t.Fatalf("starter config should have 0 capabilities, got %d", len(cfg.Capabilities))
 	}
 }
+
+func TestToolsConfigResolution(t *testing.T) {
+	on, off := true, false
+
+	tests := []struct {
+		name     string
+		tools    ToolsConfig
+		detected bool
+		wantSch  bool
+		wantVlt  bool
+	}{
+		{"unset falls back to detection (found)", ToolsConfig{}, true, true, true},
+		{"unset falls back to detection (missing)", ToolsConfig{}, false, false, false},
+		{"force on without signal", ToolsConfig{Schema: &on, Vaulty: &on}, false, true, true},
+		{"force off despite signal", ToolsConfig{Schema: &off, Vaulty: &off}, true, false, false},
+		{"groups resolve independently", ToolsConfig{Schema: &on}, false, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.tools.SchemaEnabled(tt.detected); got != tt.wantSch {
+				t.Errorf("SchemaEnabled(%v) = %v, want %v", tt.detected, got, tt.wantSch)
+			}
+			if got := tt.tools.VaultyEnabled(tt.detected); got != tt.wantVlt {
+				t.Errorf("VaultyEnabled(%v) = %v, want %v", tt.detected, got, tt.wantVlt)
+			}
+		})
+	}
+}
+
+func TestToolsConfigParsedFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("tools:\n  schema: true\n  vaulty: false\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Tools.Schema == nil || !*cfg.Tools.Schema {
+		t.Errorf("expected tools.schema true, got %v", cfg.Tools.Schema)
+	}
+	if cfg.Tools.Vaulty == nil || *cfg.Tools.Vaulty {
+		t.Errorf("expected tools.vaulty false, got %v", cfg.Tools.Vaulty)
+	}
+
+	// An absent tools: section must stay nil so auto-detection wins.
+	bare, err := loadFrom(writeTempConfig(t, "capabilities: []\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare.Tools.Schema != nil || bare.Tools.Vaulty != nil {
+		t.Errorf("expected unset tool overrides, got %v / %v", bare.Tools.Schema, bare.Tools.Vaulty)
+	}
+}
+
+func writeTempConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}

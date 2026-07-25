@@ -13,6 +13,7 @@ import (
 	"github.com/djtouchette/rivet/internal/policy"
 	"github.com/djtouchette/rivet/internal/projectcli"
 	"github.com/djtouchette/rivet/internal/recon"
+	schemaconfig "github.com/djtouchette/rivet/internal/schema/config"
 	"github.com/djtouchette/rivet/internal/vaulty"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -463,14 +464,65 @@ func buildPolicies(cfg *config.Config) []policy.Rule {
 	return rules
 }
 
+// builtinGroupsFor decides which optional builtin groups this project gets.
+// Auto-detection is the default; the tools: section of config.yaml overrides it
+// in either direction.
+func builtinGroupsFor(cfg *config.Config) capabilities.BuiltinGroups {
+	return capabilities.BuiltinGroups{
+		Schema: cfg.Tools.SchemaEnabled(schemaInUse(cfg.Path())),
+		Vaulty: cfg.Tools.VaultyEnabled(vaultyInUse()),
+	}
+}
+
+// schemaInUse reports whether the schema: section of .rivet/config.yaml names
+// anything the schema tools can work on. With no database, no migrations dir,
+// and no code-scan root there is nothing to read and every schema.* call fails
+// the same way, so the definitions are pure context cost.
+func schemaInUse(rivetConfigPath string) bool {
+	sc, err := schemaconfig.Load(rivetConfigPath)
+	if err != nil {
+		// An unparseable schema section can't drive the tools either.
+		return false
+	}
+	return len(sc.Databases) > 0 || len(sc.Migrations.AllDirs()) > 0 || len(sc.CodeScan.Roots) > 0
+}
+
+// vaultyInUse reports whether a vault exists for this project or user. Vaulty
+// resolves its config from ./vaulty.{toml,yaml,yml}, .vaulty/, and
+// ~/.config/vaulty/, falling back to the ~/.config/vaulty/vault.age store; with
+// none of those present every vaulty.* call dies on an unopenable vault.
+// Creating that first vault is a human CLI step (`rivet vaulty init`), never an
+// MCP one, so withholding the tools until then loses nothing.
+func vaultyInUse() bool {
+	configNames := []string{"vaulty.toml", "vaulty.yaml", "vaulty.yml"}
+
+	for _, name := range configNames {
+		if fileExists(name) || fileExists(filepath.Join(".vaulty", name)) {
+			return true
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	dir := filepath.Join(home, ".config", "vaulty")
+	for _, name := range append(configNames, "vault.age") {
+		if fileExists(filepath.Join(dir, name)) {
+			return true
+		}
+	}
+	return false
+}
+
 // buildRegistry loads built-in capabilities first, then the capabilities
 // manifest (.rivet/capabilities.yaml), then config overrides.
 // Shared between inspect, project, and serve commands.
 func buildRegistry(cfg *config.Config) *capabilities.Registry {
 	reg := capabilities.NewRegistry()
 
-	// Register builtins first.
-	for _, b := range capabilities.Builtins() {
+	// Register builtins first, minus the optional groups this project can't use.
+	for _, b := range capabilities.BuiltinsFor(builtinGroupsFor(cfg)) {
 		reg.Register(b)
 	}
 

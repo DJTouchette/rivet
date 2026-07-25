@@ -913,3 +913,89 @@ func TestRallyPinTool_NoRegistry(t *testing.T) {
 		t.Fatal("expected IsError when pin registry is nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// context-show across tiers, and wiki link resolution
+// ---------------------------------------------------------------------------
+
+// context-recommend pools wiki docs alongside curated ones, so a name it
+// returns has to be retrievable. Searching only s.contexts meant an agent that
+// followed a recommendation for a wiki doc got "not found".
+func TestContextShowFindsWikiDoc(t *testing.T) {
+	s := newTestServer(t)
+	s.SetWiki([]*rivetctx.Document{
+		{Name: "onboarding", Kind: rivetctx.KindWiki, Title: "Onboarding", Body: "# Onboarding\n\nStart here."},
+	})
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.context-show","arguments":{"name":"onboarding"}}}`)
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if result.IsError {
+		t.Fatalf("wiki doc should be retrievable, got: %s", result.Content[0].Text)
+	}
+	if !strings.Contains(result.Content[0].Text, "Start here.") {
+		t.Errorf("wrong body returned: %s", result.Content[0].Text)
+	}
+}
+
+func TestContextShowFindsRunbook(t *testing.T) {
+	s := newTestServer(t)
+	s.SetRunbooks([]*rivetctx.Document{
+		{Name: "payment-backlog", Kind: rivetctx.KindRunbook, Title: "Payment backlog", Body: "# Recovery\n\nSteps."},
+	})
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.context-show","arguments":{"name":"payment-backlog"}}}`)
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if result.IsError {
+		t.Fatalf("runbook should be retrievable, got: %s", result.Content[0].Text)
+	}
+}
+
+// A domain doc pointing at the module doc that explains a detail is useless if
+// the pointer isn't followable, so outgoing links are appended to the body.
+func TestContextShowAppendsResolvedLinks(t *testing.T) {
+	s := newTestServer(t)
+	s.contexts = []*rivetctx.Document{
+		{Name: "orders", Kind: rivetctx.KindDomain, Title: "Orders", Body: "# Orders\n\nSee [[retry]]."},
+		{Name: "retry", Kind: rivetctx.KindModule, Title: "Retry Scheduler", Body: "# Retry\n\nDetail."},
+	}
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.context-show","arguments":{"name":"orders"}}}`)
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	text := result.Content[0].Text
+
+	if !strings.Contains(text, "Linked documents:") {
+		t.Errorf("expected a linked-documents block:\n%s", text)
+	}
+	// The name is what context-show takes as an argument, so it must appear.
+	if !strings.Contains(text, "retry") || !strings.Contains(text, "Retry Scheduler") {
+		t.Errorf("expected the resolved link's name and title:\n%s", text)
+	}
+}
+
+func TestContextShowNoLinkBlockWhenNoLinks(t *testing.T) {
+	s := newTestServer(t)
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.context-show","arguments":{"name":"billing"}}}`)
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if strings.Contains(result.Content[0].Text, "Linked documents:") {
+		t.Errorf("a doc with no links should get no link block:\n%s", result.Content[0].Text)
+	}
+}
+
+func TestContextShowStillErrorsOnUnknownName(t *testing.T) {
+	s := newTestServer(t)
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rivet.context-show","arguments":{"name":"does-not-exist"}}}`)
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+	if !result.IsError {
+		t.Error("an unknown name should still be an error")
+	}
+}

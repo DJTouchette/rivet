@@ -46,6 +46,7 @@ promotion pass folds it into a curated doc.
 - `wiki.go`, `runbook.go`, `codedocs.go` — the other three tiers
 - `semantic/` — embedding backends (onnx/ollama/openai) and the committable vector cache
 - `lint.go` — staleness and quality checks, incl. runbook `last_tested`
+- `links.go` — `[[wikilink]]` extraction, resolution and rendering
 
 ## Failure modes
 
@@ -77,3 +78,17 @@ promotion pass folds it into a curated doc.
   conflate them.
 - `CountActive` counts files *without* `promoted: true` — that is what the
   promotion nudge in [[mcp]] thresholds against.
+- **Lint is corpus-wide, not per-doc.** `broken-wikilink` and `duplicate-name`
+  need every name up front, so `Lint` builds the index and hands it to
+  `lintDoc`. Passing nil skips link checking rather than reporting every link as
+  broken — relevant if you ever lint a single doc in isolation.
+- **`looksLikeFilePath` is deliberately conservative**, and the interesting part
+  is why it *rejects* things. Backticks in prose hold flags, arity notation,
+  module refs and MIME types; a false positive invents a "stale reference" for
+  something that was never a path. A candidate qualifies via a conventional
+  source prefix (which fires whether or not the dir exists — a reference into a
+  missing lib directory *is* stale) or a first segment that's a real directory.
+  Dot-directories are excluded: docs legitimately mention `.rivet/embeddings/`
+  before anything creates it.
+- Lint exits non-zero on errors, or on anything with `--strict`. CI runs
+  `--strict` against this repo's own docs, so a broken link fails the build.

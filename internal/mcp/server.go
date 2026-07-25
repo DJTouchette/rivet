@@ -783,12 +783,20 @@ func (s *Server) handleContextShow(req *Request, name string) *Response {
 		}
 	}
 
-	for _, doc := range s.contexts {
+	// Search every tier. context-recommend pools wiki and code-extracted docs
+	// alongside curated ones, so restricting this to s.contexts meant an agent
+	// that followed a recommendation for anything else got "not found".
+	all := s.allDocs()
+	for _, doc := range all {
 		if doc.Name == name {
+			// Outgoing links are appended so the agent can walk the graph —
+			// a domain doc pointing at the module doc that explains a detail
+			// is useless if the pointer isn't followable.
+			text := doc.Body + rivetctx.FormatWikiLinks(doc, all)
 			return &Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
-				Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: doc.Body}}},
+				Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: text}}},
 			}
 		}
 	}

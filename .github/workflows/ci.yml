@@ -27,3 +27,20 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Gofmt
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # Rivet's own context docs are held to the standard rivet asks of every
+      # project. --strict fails on warnings too, so a broken [[link]] or a doc
+      # drifting past its review date breaks the build rather than rotting
+      # quietly. Runs on one OS only — it reads files, nothing platform-specific.
+      - name: Context lint
+        if: matrix.os == 'ubuntu-latest'
+        run: go run ./cmd/rivet context lint --strict

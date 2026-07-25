@@ -81,6 +81,30 @@ Context docs are the **curated** tier: deliberately edited, kept short, reviewed
 
 Context docs are exposed as MCP resources, so Claude can pull the right domain knowledge before making changes. The recommendation engine scores docs by tag matches, file path globs, and keyword relevance, so Claude doesn't have to guess which context to read.
 
+### Linking Docs Together
+
+Docs cross-reference each other with `[[doc-name]]`, the same syntax Obsidian uses. An alias works too: `[[payment-retry|the retry scheduler]]`.
+
+```markdown
+Retries are owned by the scheduler — see [[payment-retry]] before changing this.
+```
+
+`rivet context show` and `rivet.context-show` append the resolved links to whatever they print, so a reader gets the names to look up next and an agent gets the exact argument to pass. Links inside code fences and backticks are ignored, so documenting the syntax doesn't create a dependency on a doc named `example`.
+
+`rivet context lint` validates every link. A typo'd `[[link]]` is otherwise invisible, because plain markdown renders it as literal text.
+
+### Keeping Docs Honest
+
+`rivet context lint` is the thing that stops a context doc from quietly becoming a lie. It checks curated docs for missing tags, paths, owner and review date; runbooks for triggers, owner and a `last_tested` that isn't ancient; and every doc for placeholder sections left unfilled, backtick-quoted paths that no longer exist, broken `[[links]]`, and two docs sharing a name (which makes lookup ambiguous). Wiki docs are free-form and often imported, so only the universal rules apply. Code-extracted docs are exempt from frontmatter rules — a `rivet:context` comment has nowhere to put an owner.
+
+It exits non-zero on errors, or on anything at all with `--strict`, so it belongs in CI:
+
+```yaml
+- run: rivet context lint --strict
+```
+
+Rivet runs exactly that on itself.
+
 ### Context Docs in the Code Itself
 
 Some context belongs next to the line it's about. Two in-repo forms feed the same retrieval engine, extracted deterministically by recon:
@@ -447,7 +471,8 @@ rivet runbook find <symptom>  Find the operational runbook for a symptom
 rivet runbook list            List runbooks and their triggers
 rivet runbook draft <title>   Draft a runbook for human review (--steps, --trigger)
 rivet runbook promote <name>  Promote a reviewed draft into an active runbook
-rivet context lint            Check docs for quality and staleness
+rivet context lint            Check docs for quality, staleness, and broken links
+                              (--strict to fail on warnings too, for CI)
 rivet learnings add <title>   Record a learning (--observation required)
 rivet learnings list          Active (un-promoted) entries (--all, --json)
 rivet learnings show <name>   Read one entry

@@ -136,7 +136,7 @@ func TestPromoteRunbookDraft_Errors(t *testing.T) {
 func TestLintRunbookRules(t *testing.T) {
 	// A runbook with no triggers, no owner, no last_tested.
 	bad := &Document{Name: "bad", Kind: KindRunbook, Title: "Bad", Body: "## Steps\ndo it"}
-	warns := lintDoc(bad, t.TempDir())
+	warns := lintDoc(bad, t.TempDir(), nil)
 	rules := map[string]bool{}
 	for _, w := range warns {
 		rules[w.Rule] = true
@@ -161,7 +161,7 @@ func TestLintRunbookStaleTest(t *testing.T) {
 		LastTested: time.Now().AddDate(0, 0, -StaleTestDays-10),
 	}
 	var found bool
-	for _, w := range lintDoc(old, t.TempDir()) {
+	for _, w := range lintDoc(old, t.TempDir(), nil) {
 		if w.Rule == "stale-test" {
 			found = true
 		}
@@ -174,7 +174,7 @@ func TestLintRunbookStaleTest(t *testing.T) {
 func TestLintWikiIsLenient(t *testing.T) {
 	// A wiki page with no tags/owner/related_paths should not be nagged.
 	w := &Document{Name: "page", Kind: KindWiki, Title: "Page", Body: "Some prose."}
-	for _, warn := range lintDoc(w, t.TempDir()) {
+	for _, warn := range lintDoc(w, t.TempDir(), nil) {
 		if warn.Rule == "missing-tags" || warn.Rule == "missing-owner" || warn.Rule == "missing-related-paths" || warn.Rule == "stale-review" {
 			t.Errorf("wiki should not get context-doc nag %q", warn.Rule)
 		}

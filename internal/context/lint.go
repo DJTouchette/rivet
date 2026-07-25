@@ -36,13 +36,47 @@ type LintResult struct {
 	DocsRead int           `json:"docs_read"`
 }
 
+// HasErrors reports whether any warning is error severity. Callers use this to
+// decide an exit code — errors mean a doc is broken, not merely untidy.
+func (r LintResult) HasErrors() bool {
+	for _, w := range r.Warnings {
+		if w.Severity == SeverityError {
+			return true
+		}
+	}
+	return false
+}
+
 // Lint validates context documents and returns any issues found.
 // projectRoot is the project root directory used for resolving related_paths.
 func Lint(docs []*Document, projectRoot string) LintResult {
 	result := LintResult{DocsRead: len(docs)}
 
+	// Link validation and collision detection are corpus-wide, so the known
+	// names are collected before any single doc is checked.
+	names := make(map[string]int, len(docs))
 	for _, doc := range docs {
-		result.Warnings = append(result.Warnings, lintDoc(doc, projectRoot)...)
+		names[doc.Name]++
+	}
+
+	reportedDuplicate := make(map[string]bool)
+	for _, doc := range docs {
+		result.Warnings = append(result.Warnings, lintDoc(doc, projectRoot, names)...)
+
+		// A duplicate is one problem, not one per copy, so it's reported once
+		// against the first doc carrying the name.
+		if names[doc.Name] > 1 && !reportedDuplicate[doc.Name] {
+			reportedDuplicate[doc.Name] = true
+			result.Warnings = append(result.Warnings, LintWarning{
+				Document: doc.Name,
+				Kind:     doc.Kind,
+				Path:     doc.Path,
+				Severity: SeverityError,
+				Rule:     "duplicate-name",
+				Message: fmt.Sprintf("%d documents share the name %q — 'context show' and [[links]] resolve to only one of them, and which one is not defined",
+					names[doc.Name], doc.Name),
+			})
+		}
 	}
 
 	return result
@@ -52,7 +86,7 @@ func Lint(docs []*Document, projectRoot string) LintResult {
 // flagged. Untested runbooks are dangerous to follow under pressure.
 const StaleTestDays = 180
 
-func lintDoc(doc *Document, projectRoot string) []LintWarning {
+func lintDoc(doc *Document, projectRoot string, knownNames map[string]int) []LintWarning {
 	var warnings []LintWarning
 	add := func(sev Severity, rule, msg string) {
 		warnings = append(warnings, LintWarning{
@@ -83,6 +117,11 @@ func lintDoc(doc *Document, projectRoot string) []LintWarning {
 		}
 	case KindWiki:
 		// Wiki is free-form (often imported); only flag genuinely broken content.
+	case KindCode:
+		// Code-extracted docs come from `rivet:context` comments and .context/
+		// sidecars. There is nowhere to put an owner or a last_reviewed date in a
+		// code comment, so demanding frontmatter here would only generate noise
+		// nobody can act on. Content rules below still apply.
 	default:
 		// Curated context kinds.
 		if len(doc.Tags) == 0 {
@@ -94,8 +133,11 @@ func lintDoc(doc *Document, projectRoot string) []LintWarning {
 		if strings.TrimSpace(doc.Owner) == "" {
 			add(SeverityWarning, "missing-owner", "no owner in frontmatter — add an owner responsible for keeping this doc accurate")
 		}
+		// Distinct rules for absent vs old, mirroring how runbooks separate
+		// untested-runbook from stale-test. One rule name for both conditions
+		// made "show me the docs that have actually gone stale" unanswerable.
 		if doc.LastReviewed.IsZero() {
-			add(SeverityWarning, "stale-review", "no last_reviewed date in frontmatter — add one so staleness can be tracked")
+			add(SeverityWarning, "missing-review", "no last_reviewed date in frontmatter — add one so staleness can be tracked")
 		} else if age := int(time.Since(doc.LastReviewed).Hours() / 24); age > StaleReviewDays {
 			add(SeverityWarning, "stale-review",
 				fmt.Sprintf("last reviewed %d days ago (threshold: %d) — re-review and update last_reviewed", age, StaleReviewDays))
@@ -112,9 +154,29 @@ func lintDoc(doc *Document, projectRoot string) []LintWarning {
 	}
 
 	// Rule: empty-body — body has no meaningful content.
-	stripped := stripFrontmatterAndHeadings(doc.Body)
+	stripped := stripHeadingsAndPlaceholders(doc.Body)
 	if strings.TrimSpace(stripped) == "" {
 		add(SeverityError, "empty-body", "document has no content beyond headings")
+	}
+
+	// Rule: broken-wikilink — [[links]] pointing at a doc that doesn't exist.
+	// Nothing renders these, so a typo is invisible without this check.
+	//
+	// A nil knownNames means the caller is linting one document without knowing
+	// the rest of the corpus. Reporting every link as broken would be worse than
+	// saying nothing, so link checking is skipped entirely.
+	if knownNames != nil {
+		for _, link := range WikiLinks(doc.Body) {
+			if link.Target == doc.Name {
+				add(SeverityWarning, "self-wikilink",
+					fmt.Sprintf("[[%s]] links to this document — remove it", link.Target))
+				continue
+			}
+			if knownNames[link.Target] == 0 {
+				add(SeverityWarning, "broken-wikilink",
+					fmt.Sprintf("[[%s]] does not match any known document — check the name or write the doc", link.Target))
+			}
+		}
 	}
 
 	// Rule: stale-related-path — related_paths that match nothing on disk.
@@ -147,9 +209,10 @@ func countPlaceholders(body string) int {
 	return count
 }
 
-// stripFrontmatterAndHeadings removes markdown headings and frontmatter,
-// leaving only body content for emptiness checks.
-func stripFrontmatterAndHeadings(body string) string {
+// stripHeadingsAndPlaceholders removes markdown headings and unfilled
+// placeholder comments, leaving only real body content for emptiness checks.
+// Document.Body already excludes frontmatter.
+func stripHeadingsAndPlaceholders(body string) string {
 	var lines []string
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -197,7 +260,7 @@ func findStaleReferences(body, root string) []string {
 	seen := make(map[string]bool)
 
 	for _, line := range strings.Split(body, "\n") {
-		refs := extractBacktickPaths(line)
+		refs := extractBacktickPaths(line, root)
 		for _, ref := range refs {
 			if seen[ref] {
 				continue
@@ -220,23 +283,28 @@ func findStaleReferences(body, root string) []string {
 
 // extractBacktickPaths finds backtick-quoted strings that look like file paths.
 // Matches patterns like `lib/app/foo.ex`, `src/handlers/`, `internal/pkg/bar.go`.
-func extractBacktickPaths(line string) []string {
+func extractBacktickPaths(line, root string) []string {
 	var paths []string
 
 	parts := strings.Split(line, "`")
 	// Backtick content is at odd indices: text`content`text`content`text
 	for i := 1; i < len(parts); i += 2 {
 		candidate := strings.TrimSpace(parts[i])
-		if looksLikeFilePath(candidate) {
+		if looksLikeFilePath(candidate, root) {
 			paths = append(paths, candidate)
 		}
 	}
 	return paths
 }
 
-// looksLikeFilePath returns true if s looks like a relative file or directory path
-// anchored from the project root (starts with a known source directory).
-func looksLikeFilePath(s string) bool {
+// looksLikeFilePath returns true if s looks like a relative file or directory
+// path anchored from the project root.
+//
+// The bar is deliberately high. Backticks in prose hold far more than paths —
+// function names, flags, YAML keys, module references — and a false positive
+// here produces a "stale reference" warning for something that was never a
+// path, which is worse than missing a genuinely dead one.
+func looksLikeFilePath(s, root string) bool {
 	if s == "" || len(s) < 3 {
 		return false
 	}
@@ -266,31 +334,60 @@ func looksLikeFilePath(s string) bool {
 			return false
 		}
 	}
-	// Must not end with arity notation (func/2, handler/3).
-	lastSlash := strings.LastIndex(s, "/")
-	if lastSlash >= 0 {
-		after := s[lastSlash+1:]
-		if isDigits(after) {
-			return false
-		}
-		// Also catch func_name/2 patterns where the part before / has no dots or slashes.
-		if isDigits(after) || (len(after) <= 2 && isDigits(after)) {
+	// Must not end with arity notation (func/2, handler/3) — Elixir and Erlang
+	// docs are full of these and they are not paths.
+	if lastSlash := strings.LastIndex(s, "/"); lastSlash >= 0 {
+		if isDigits(s[lastSlash+1:]) {
 			return false
 		}
 	}
-	// Must start with a known source directory prefix to avoid matching
-	// domain-relative paths like "quotes/quote.ex" that aren't rooted.
-	knownPrefixes := []string{
-		"lib/", "src/", "app/", "pkg/", "internal/", "cmd/",
-		"test/", "tests/", "spec/", "priv/", "config/", "bin/",
-		"assets/", "static/", "public/", "web/", "backend/", "frontend/",
-	}
-	for _, prefix := range knownPrefixes {
+
+	// Must be rooted, so domain-relative prose like "quotes/quote.ex" doesn't
+	// get treated as a path from the project root. Two ways to qualify:
+	// a conventional source directory, or — for any layout the list doesn't
+	// anticipate, like services/ or packages/ — a first segment that really is
+	// a directory in this project.
+	for _, prefix := range conventionalSourceDirs {
 		if strings.HasPrefix(s, prefix) {
 			return true
 		}
 	}
-	return false
+	return firstSegmentIsProjectDir(s, root)
+}
+
+// conventionalSourceDirs are prefixes that mark a path as project-rooted even
+// when the directory is absent — which is the point: a doc referencing
+// `lib/app/gone.ex` in a project with no lib/ is a stale reference worth
+// reporting, not an unrecognised layout.
+var conventionalSourceDirs = []string{
+	"lib/", "src/", "app/", "pkg/", "internal/", "cmd/",
+	"test/", "tests/", "spec/", "priv/", "config/", "bin/",
+	"assets/", "static/", "public/", "web/", "backend/", "frontend/",
+}
+
+// firstSegmentIsProjectDir reports whether a candidate's first path segment is
+// a real directory under root. This is what lets the check work in a repo laid
+// out as services/, packages/, apps/ or anything else, without maintaining a
+// list of every convention in existence.
+func firstSegmentIsProjectDir(s, root string) bool {
+	segment := s
+	if slash := strings.Index(s, "/"); slash >= 0 {
+		segment = s[:slash]
+	}
+	if segment == "" || segment == "." || segment == ".." {
+		return false
+	}
+
+	// Dot-directories hold state and config, not source, and much of what docs
+	// say about them is a forward reference: the runbook for enabling embeddings
+	// legitimately talks about `.rivet/embeddings/` before anything has created
+	// it. Treating those as stale references is noise by construction.
+	if strings.HasPrefix(segment, ".") {
+		return false
+	}
+
+	info, err := os.Stat(filepath.Join(root, segment))
+	return err == nil && info.IsDir()
 }
 
 // isDigits returns true if s is non-empty and contains only digits.

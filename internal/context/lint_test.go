@@ -284,23 +284,20 @@ func TestLintStaleReview(t *testing.T) {
 
 	result := Lint([]*Document{old, missing}, root)
 
-	oldStale, missingStale := false, false
+	// An absent date and an expired one are separate rules, so that "which docs
+	// have actually gone stale" is answerable without matching on the message.
+	rules := map[string]string{}
 	for _, w := range result.Warnings {
-		if w.Rule != "stale-review" {
-			continue
-		}
-		switch w.Document {
-		case "billing":
-			oldStale = true
-		case "auth":
-			missingStale = true
+		if w.Rule == "stale-review" || w.Rule == "missing-review" {
+			rules[w.Document] = w.Rule
 		}
 	}
-	if !oldStale {
-		t.Error("expected stale-review warning for old billing doc")
+
+	if rules["billing"] != "stale-review" {
+		t.Errorf("old billing doc should be stale-review, got %q", rules["billing"])
 	}
-	if !missingStale {
-		t.Error("expected stale-review warning for auth doc missing last_reviewed")
+	if rules["auth"] != "missing-review" {
+		t.Errorf("auth doc with no last_reviewed should be missing-review, got %q", rules["auth"])
 	}
 }
 
@@ -337,8 +334,11 @@ func TestExtractBacktickPaths(t *testing.T) {
 		{"`:telemetry.execute/3` is an atom ref", 0},          // starts with :
 	}
 
+	// An empty root means the "is it a real project directory" fallback can
+	// never fire, so these cases exercise the conventional-prefix path alone.
+	root := t.TempDir()
 	for _, tt := range tests {
-		got := extractBacktickPaths(tt.line)
+		got := extractBacktickPaths(tt.line, root)
 		if len(got) != tt.want {
 			t.Errorf("extractBacktickPaths(%q) = %v (len %d), want len %d", tt.line, got, len(got), tt.want)
 		}
@@ -374,10 +374,56 @@ func TestLooksLikeFilePath(t *testing.T) {
 		{"lib/billing/{context}.ex", false}, // braces
 	}
 
+	root := t.TempDir()
 	for _, tt := range tests {
-		got := looksLikeFilePath(tt.s)
+		got := looksLikeFilePath(tt.s, root)
 		if got != tt.want {
-			t.Errorf("looksLikeFilePath(%q) = %v, want %v", tt.s, got, tt.want)
+			t.Errorf("looksLikeFilePath(%q, emptyRoot) = %v, want %v", tt.s, got, tt.want)
 		}
+	}
+}
+
+// The conventional-prefix list can't anticipate every layout, so a first
+// segment that really is a directory in this project also qualifies.
+func TestLooksLikeFilePathAcceptsRealProjectDirs(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"services", "packages"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		s    string
+		want bool
+	}{
+		{"unconventional dir that exists", "services/billing/handler.go", true},
+		{"another one", "packages/ui/index.ts", true},
+		{"unconventional dir that doesn't exist", "widgets/thing.go", false},
+		// A conventional prefix qualifies whether or not the directory exists —
+		// that's the point, since a reference into a missing lib/ is stale.
+		{"conventional dir that doesn't exist", "lib/app/gone.ex", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := looksLikeFilePath(tt.s, root); got != tt.want {
+				t.Errorf("looksLikeFilePath(%q) = %v, want %v", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
+// Dot-directories hold state that rivet creates on demand, so docs legitimately
+// reference paths inside them before they exist. Flagging those is noise.
+func TestLooksLikeFilePathIgnoresDotDirs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".rivet"), 0755); err != nil {
+		t.Fatalf("mkdir .rivet: %v", err)
+	}
+
+	if looksLikeFilePath(".rivet/embeddings/", root) {
+		t.Error("a path inside a dot-directory should not be treated as a source reference")
 	}
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -145,15 +146,25 @@ func newContextShowCmd() *cobra.Command {
 		Short: "Show a context document by name",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Search every tier, not just curated context: context-recommend
+			// surfaces wiki docs too, and a name it returned has to be
+			// retrievable or following a recommendation dead-ends.
 			docs, err := rivetctx.Load(".rivet/context")
 			if err != nil {
 				return err
+			}
+			if wiki, err := rivetctx.LoadWiki(".", nil); err == nil {
+				docs = append(docs, wiki...)
+			}
+			if runbooks, err := rivetctx.LoadRunbooks("."); err == nil {
+				docs = append(docs, runbooks...)
 			}
 
 			name := args[0]
 			for _, d := range docs {
 				if d.Name == name {
 					fmt.Print(d.Body)
+					fmt.Print(rivetctx.FormatWikiLinks(d, docs))
 					return nil
 				}
 			}
@@ -272,18 +283,41 @@ To add tags and related_paths, use frontmatter in context documents:
 
 func newContextLintCmd() *cobra.Command {
 	var jsonOutput bool
+	var strict bool
 
 	cmd := &cobra.Command{
 		Use:   "lint",
 		Short: "Validate context documents for quality and staleness",
-		Long: `Check context documents for common issues:
+		Long: `Check context documents for common issues.
 
+Curated docs (domain/module/paradigm):
   missing-tags          — no tags in frontmatter
   missing-related-paths — no related_paths in frontmatter
+  missing-owner         — nobody is responsible for keeping this accurate
+  missing-review        — no last_reviewed date, so staleness can't be tracked
+  stale-review          — last_reviewed is older than the threshold
+
+Runbooks:
+  missing-triggers      — no symptoms, so it can't be found when it's needed
+  missing-owner         — no owning team
+  untested-runbook      — no last_tested date
+  stale-test            — last_tested is older than the threshold
+
+Every document:
   placeholder-section   — unfilled <!-- ... --> template comments
-  empty-body            — no content beyond headings
+  empty-body            — no content beyond headings (error)
   stale-related-path    — related_paths glob matches no files on disk
-  stale-reference       — backtick-quoted paths in body don't exist on disk`,
+  stale-reference       — backtick-quoted paths in body don't exist on disk
+  broken-wikilink       — [[link]] naming no known document
+  self-wikilink         — [[link]] pointing at its own document
+  duplicate-name        — two documents share a name (error)
+
+Wiki docs are free-form and often imported, so only the universal rules apply.
+Code-extracted docs are exempt from frontmatter rules — a rivet:context comment
+has nowhere to put an owner.
+
+Exits non-zero if any error-severity issue is found, or on any issue at all
+with --strict.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			docs, err := rivetctx.Load(".rivet/context")
 			if err != nil {
@@ -304,10 +338,26 @@ func newContextLintCmd() *cobra.Command {
 
 			result := rivetctx.Lint(docs, ".")
 
+			// A findings-based exit code is what makes this usable in CI. Usage
+			// text and cobra's own error line are both suppressed: every finding
+			// has already been printed in detail, so main's single line is all
+			// the summary needed.
+			failed := result.HasErrors() || (strict && len(result.Warnings) > 0)
+			if failed {
+				cmd.SilenceUsage = true
+				cmd.SilenceErrors = true
+			}
+
 			if jsonOutput {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(result)
+				if err := enc.Encode(result); err != nil {
+					return err
+				}
+				if failed {
+					return errLintFailed
+				}
+				return nil
 			}
 
 			if len(result.Warnings) == 0 {
@@ -324,9 +374,18 @@ func newContextLintCmd() *cobra.Command {
 				fmt.Printf("  [%s] %s (%s): %s\n", severity, w.Document, w.Rule, w.Message)
 			}
 			fmt.Println()
+
+			if failed {
+				return errLintFailed
+			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
+	cmd.Flags().BoolVar(&strict, "strict", false, "exit non-zero on warnings too, not just errors")
 	return cmd
 }
+
+// errLintFailed signals a non-zero exit without adding a second error line to
+// output that already listed every finding in detail.
+var errLintFailed = errors.New("context lint found issues")

@@ -346,6 +346,14 @@ func looksLikeFilePath(s, root string) bool {
 	if strings.ContainsAny(s, "()={}") {
 		return false
 	}
+	// Globs and placeholders are documentation conventions, not paths, and
+	// resolving them literally invents rot that isn't there: real docs write
+	// `database/migrations/*.sql` and `environment/.env.<env>` to describe a
+	// family of files. Checking whether the containing directory exists would be
+	// a different, weaker rule; this check is about a specific file having moved.
+	if strings.ContainsAny(s, "*?<>[]") {
+		return false
+	}
 	// Must not contain uppercase (filters module refs like Module.func/1, Billing.can_*?/1).
 	for _, r := range s {
 		if r >= 'A' && r <= 'Z' {

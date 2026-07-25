@@ -427,3 +427,25 @@ func TestLooksLikeFilePathIgnoresDotDirs(t *testing.T) {
 		t.Error("a path inside a dot-directory should not be treated as a source reference")
 	}
 }
+
+// Docs describe families of files with globs and placeholders. Resolving those
+// literally reported rot that did not exist — a real corpus had five such
+// "stale" references, four of whose directories were present and correct.
+func TestLooksLikeFilePathIgnoresGlobsAndPlaceholders(t *testing.T) {
+	root := t.TempDir()
+	for _, s := range []string{
+		"database/migrations/*.sql",
+		"environment/.env.<env>",
+		"qa/workbench/jstests/<slug>.mjs",
+		"src/**/handler.go",
+		"lib/app/[id].ex",
+	} {
+		if looksLikeFilePath(s, root) {
+			t.Errorf("%q is a pattern, not a path to resolve", s)
+		}
+	}
+	// A concrete path must still be checked.
+	if !looksLikeFilePath("lib/app/gone.ex", root) {
+		t.Error("a literal path should still be treated as a reference")
+	}
+}

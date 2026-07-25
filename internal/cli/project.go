@@ -65,16 +65,37 @@ After scaffolding (Elixir):
 				return fmt.Errorf(".rivet/ not found — run 'rivet init' first")
 			}
 
-			// Auto-detect language if not specified.
+			detected := ""
 			if lang == "" {
-				lang = detectProjectLanguage()
+				detected = detectProjectLanguage()
+				lang = detected
 			}
 
+			// Only elixir and go have scaffolds. Everything else used to fall
+			// through to the Go one, so a Python or Node repo silently acquired
+			// a cobra module and a go.mod it never asked for. Refusing with the
+			// detected language named is more useful than a wrong scaffold, and
+			// --lang go is still there for anyone who wants the standalone Go
+			// CLI deliberately — it is its own module, so it works from any repo.
 			switch lang {
 			case "elixir":
 				return initElixirCLI(name)
-			default:
+			case "go":
 				return initGoCLI(dir, name, modulePath)
+			case "":
+				// These messages already say exactly what to do, so cobra's
+				// usage block underneath them is pure noise.
+				cmd.SilenceUsage = true
+				return fmt.Errorf("could not detect the project language — pass --lang go or --lang elixir")
+			default:
+				cmd.SilenceUsage = true
+				if detected != "" {
+					return fmt.Errorf("detected a %s project, which has no scaffold yet\n\n"+
+						"Either pass --lang go for the standalone Go CLI (a separate module, usable from any project),\n"+
+						"or write a CLI in %s that answers the discover protocol and register it with:\n"+
+						"  rivet project register-cli <command> --discover <args>", lang, lang)
+				}
+				return fmt.Errorf("unsupported --lang %q: expected go or elixir", lang)
 			}
 		},
 	}
@@ -199,7 +220,12 @@ func printNextSteps(steps []string) {
 	}
 }
 
-// detectProjectLanguage uses simple file heuristics to determine the primary language.
+// detectProjectLanguage uses simple file heuristics to determine the primary
+// language, returning "" when nothing matches.
+//
+// It used to fall back to "go", which meant a repo it couldn't identify was
+// indistinguishable from a real Go repo and got a Go scaffold either way. An
+// honest "I don't know" lets the caller say so.
 func detectProjectLanguage() string {
 	if fileExists("mix.exs") {
 		return "elixir"
@@ -219,7 +245,7 @@ func detectProjectLanguage() string {
 	if fileExists("Gemfile") {
 		return "ruby"
 	}
-	return "go"
+	return ""
 }
 
 // --- register-cli ---

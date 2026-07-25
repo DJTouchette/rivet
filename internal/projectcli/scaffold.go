@@ -68,33 +68,14 @@ func scaffoldFiles(cliName, modulePath string) []scaffoldFile {
 	}
 }
 
-// DiscoverCapabilities returns the capability definitions that the scaffold
-// would register. Used by register-cli when the binary hasn't been built yet.
-func DiscoverCapabilities(binaryPath, cliName string) []DiscoveredCapability {
-	return []DiscoveredCapability{
-		{
-			Name:        cliName + ".status",
-			Description: "Show project status summary",
-			Command:     []string{binaryPath, "query", "status"},
-			Output:      "json",
-			Safety:      "safe",
-		},
-		{
-			Name:        cliName + ".health",
-			Description: "Run health checks",
-			Command:     []string{binaryPath, "check", "health"},
-			Output:      "json",
-			Safety:      "safe",
-		},
-		{
-			Name:        cliName + ".seed",
-			Description: "Seed development data",
-			Command:     []string{binaryPath, "task", "seed"},
-			Output:      "json",
-			Safety:      "guarded",
-		},
-	}
-}
+// The Elixir equivalent of this used to live here too, and was deleted for
+// being a third hardcoded copy of the same capability list — after the discover
+// template above and capabilities.StarterManifest* — which is exactly where
+// safety levels drift apart unnoticed. The Go copy went the same way: it had no
+// caller, and its comment claimed register-cli used it "when the binary hasn't
+// been built yet", which was never true. register-cli only ever runs the real
+// discover command. The scaffolded CLI reports its own capabilities; that is
+// the single source of truth.
 
 func tmplGoMod(modulePath string) string {
 	return fmt.Sprintf(`module %s

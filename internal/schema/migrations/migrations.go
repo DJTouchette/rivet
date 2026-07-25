@@ -36,9 +36,9 @@ type Options struct {
 
 // Result is the reconstructed static schema plus metadata.
 type Result struct {
-	Schema   *types.Schema
-	Summary  types.MigrationsSummary
-	Unparsed []string
+	Schema   *types.Schema           `json:"schema"`
+	Summary  types.MigrationsSummary `json:"summary"`
+	Unparsed []string                `json:"unparsed,omitempty"`
 }
 
 // Parse reads all SQL files under dir (recursively) in lexical order

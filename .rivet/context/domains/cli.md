@@ -63,6 +63,12 @@ subcommands in four groups:
   `.claude/settings.json`, not just `PostToolUse`, because an even older version
   registered them under `Stop`. It deletes `.rivet/hooks/` only when the
   directory is left empty. Nudging lives in the MCP server now — see [[mcp]].
+- **The root command sets `SilenceErrors`, so don't print errors yourself.**
+  `main` prints the returned error and sets the exit code. Cobra printed it too,
+  so every failure appeared twice; that is fixed once on the root and inherited
+  by every subcommand. `SilenceUsage` stays per-command — usage is still the
+  right thing to show for a genuine argument error, just not for a runtime one
+  whose message already says what to do.
 - **`rivet run` and `rivet project run` are unrelated commands.** `run` has
   `DisableFlagParsing` and forwards argv verbatim to `project_cli.command`.
   `project run` looks up a registered capability, checks policy, and executes it.

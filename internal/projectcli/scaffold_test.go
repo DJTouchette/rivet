@@ -213,30 +213,3 @@ func TestScaffoldMakefileContent(t *testing.T) {
 		t.Error("Makefile should reference the CLI name")
 	}
 }
-
-func TestDiscoverCapabilities(t *testing.T) {
-	caps := DiscoverCapabilities("./bin/myapp", "myapp")
-	if len(caps) != 3 {
-		t.Fatalf("DiscoverCapabilities() returned %d caps, want 3", len(caps))
-	}
-
-	names := make(map[string]bool)
-	for _, c := range caps {
-		names[c.Name] = true
-		if len(c.Command) == 0 {
-			t.Errorf("capability %q has no command", c.Name)
-		}
-		if c.Output == "" {
-			t.Errorf("capability %q has no output format", c.Name)
-		}
-		if c.Safety == "" {
-			t.Errorf("capability %q has no safety level", c.Name)
-		}
-	}
-
-	for _, expected := range []string{"myapp.status", "myapp.health", "myapp.seed"} {
-		if !names[expected] {
-			t.Errorf("missing expected capability %q", expected)
-		}
-	}
-}

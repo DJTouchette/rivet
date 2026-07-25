@@ -339,13 +339,12 @@ with --strict.`,
 			result := rivetctx.Lint(docs, ".")
 
 			// A findings-based exit code is what makes this usable in CI. Usage
-			// text and cobra's own error line are both suppressed: every finding
-			// has already been printed in detail, so main's single line is all
-			// the summary needed.
+			// text is suppressed because every finding has already been printed
+			// in detail; the root command suppresses cobra's duplicate error
+			// line for every subcommand.
 			failed := result.HasErrors() || (strict && len(result.Warnings) > 0)
 			if failed {
 				cmd.SilenceUsage = true
-				cmd.SilenceErrors = true
 			}
 
 			if jsonOutput {

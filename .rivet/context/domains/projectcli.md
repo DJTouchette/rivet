@@ -81,10 +81,14 @@ see [[capabilities]] and [[tool-embedding]].
   `os.Executable()` (symlinks resolved) differed from the `filepath.Abs` of the
   path you typed (not resolved), leaving an absolute path as `Command[0]` that
   `ToCapabilities` then prefixed with `cli:` again.
-- **`--lang` auto-detection has five outcomes but only two code paths.**
-  `detectProjectLanguage` returns elixir/go/node/rust/python/ruby;
-  `newProjectInitCLICmd` switches on `"elixir"` and sends *everything else* to
-  the Go scaffold. A Node or Python repo gets a Go cobra module and a `go.mod`.
+- **`--lang` detects six languages but only two have scaffolds, and the other
+  four are now refused rather than silently given the Go one.** A Node or Python
+  repo used to acquire a cobra module and a `go.mod` it never asked for, because
+  the switch sent everything that wasn't `elixir` to `initGoCLI`.
+  `detectProjectLanguage` also returns `""` now instead of falling back to
+  `"go"` — a repo it can't identify was otherwise indistinguishable from a real
+  Go repo. `--lang go` remains available deliberately: the Go scaffold is its own
+  module, so it is usable from any project.
 - **The discover command is argv, not a single token.** `project_cli.discover`
   holds the arguments appended to `command`, defaulting to `["rivet-discover"]`.
   It exists because not every CLI can host a top-level subcommand: the Elixir

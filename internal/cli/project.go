@@ -233,7 +233,7 @@ subcommand that outputs JSON with a "capabilities" array.`,
 				configPath = "./" + rel
 			}
 
-			cfg, err := config.LoadOrDefault("")
+			cfg, err := config.LoadProject()
 			if err != nil {
 				return err
 			}

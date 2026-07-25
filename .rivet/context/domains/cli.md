@@ -81,11 +81,17 @@ subcommands in four groups:
   binds the flag persistently on its root while witness binds it per subcommand.
   Before this, `rivet recon` maintained a second `<root>/.recon/` index that the
   MCP server never read.
-- **`register-cli` is the only command that writes `.rivet/config.yaml`, and it
-  rewrites the whole file.** `Config.Write` marshals the Go struct, so every
-  comment and every key the struct doesn't model is dropped — including the
-  entire `schema:` section, since `internal/config.Config` has no `Schema`
-  field. Worse, `config.LoadOrDefault("")` falls back to
-  `~/.config/rivet/config.yaml` when the project has none, and `cfg.path`
-  follows the file it loaded, so running `register-cli` before `rivet init`
-  edits the user's global config.
+- **`register-cli` is the only command that writes `.rivet/config.yaml`, and
+  writing config has two traps that both used to bite.** `Config.Write` now
+  merges into the existing document via `yaml.Node`, updating only the keys the
+  struct models. It previously marshalled the struct over the whole file, which
+  destroyed every comment and every unmodelled key — including the entire
+  `schema:` section, since `internal/config.Config` has no `Schema` field. Once
+  schema tooling became gated on that section, the same bug also made twelve MCP
+  tools vanish. If you add a writer, merge; never marshal over the file.
+- **Use `config.LoadProject()` to write, never `LoadOrDefault("")`.**
+  `LoadOrDefault` falls back to `~/.config/rivet/config.yaml` when a project has
+  no config, and `cfg.path` follows whatever it loaded — so writing through it
+  edited the user's *global* config on one project's behalf. `LoadProject` never
+  leaves the project. `LoadOrDefault` is still correct for read-only paths, where
+  a user-level fallback is a feature.

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -236,4 +237,208 @@ func writeTempConfig(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// Write used to marshal the struct straight over the file. Config has no Schema
+// field — that section belongs to internal/schema/config — so registering a
+// project CLI silently deleted a user's database credentials, and with schema
+// tooling now gated on that section, twelve MCP tools with them.
+func TestWritePreservesUnmodelledSections(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".rivet", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	original := `# Keep this comment.
+context:
+  wiki_paths:
+    - "docs/**"
+
+# And this one, above a section Config does not model.
+schema:
+  databases:
+    - name: prod
+      engine: postgres
+      password: ${SCHEMA_PW}
+  migrations:
+    dir: ./db/migrations
+`
+	if err := os.WriteFile(path, []byte(original), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadOrDefault(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.ProjectCLI.Command = "./mycli"
+	if err := cfg.Write(); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reread: %v", err)
+	}
+	text := string(got)
+
+	for _, want := range []string{
+		"schema:",      // the whole section survives
+		"name: prod",   // ...including its contents
+		"${SCHEMA_PW}", // ...and unexpanded env references
+		"dir: ./db/migrations",
+		"# Keep this comment.",
+		"# And this one",
+		"command: ./mycli", // and the update actually landed
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q after Write:\n%s", want, text)
+		}
+	}
+}
+
+// The modelled keys must actually be updated, not merely left alone.
+func TestWriteUpdatesModelledKeysInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("project_cli:\n  command: ./old\nschema:\n  keep: me\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadOrDefault(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.ProjectCLI.Command = "./new"
+	if err := cfg.Write(); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	got, _ := os.ReadFile(path)
+	text := string(got)
+	if !strings.Contains(text, "./new") {
+		t.Errorf("update did not land:\n%s", text)
+	}
+	if strings.Contains(text, "./old") {
+		t.Errorf("stale value survived:\n%s", text)
+	}
+	if !strings.Contains(text, "keep: me") {
+		t.Errorf("unmodelled key lost:\n%s", text)
+	}
+	// The key must be replaced, not duplicated.
+	if n := strings.Count(text, "project_cli:"); n != 1 {
+		t.Errorf("project_cli appears %d times, want 1:\n%s", n, text)
+	}
+}
+
+// A brand-new project has no file to merge into; that path must still work.
+func TestWriteCreatesFreshFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{path: filepath.Join(dir, ".rivet", "config.yaml")}
+	cfg.ProjectCLI.Command = "./mycli"
+
+	if err := cfg.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got, err := os.ReadFile(cfg.path)
+	if err != nil {
+		t.Fatalf("reread: %v", err)
+	}
+	if !strings.Contains(string(got), "command: ./mycli") {
+		t.Errorf("fresh file missing content:\n%s", got)
+	}
+}
+
+// Round-tripping must not corrupt the file: a second Write with no changes
+// should leave it byte-identical.
+func TestWriteIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("# c\nproject_cli:\n  command: ./x\nschema:\n  keep: me\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	first := func() string {
+		cfg, err := LoadOrDefault(path)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if err := cfg.Write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		b, _ := os.ReadFile(path)
+		return string(b)
+	}
+
+	a := first()
+	b := first()
+	if a != b {
+		t.Errorf("Write is not idempotent:\nfirst:\n%s\nsecond:\n%s", a, b)
+	}
+}
+
+// LoadOrDefault resolves to ~/.config/rivet/config.yaml when a project has no
+// config of its own, and cfg.path follows whatever it loaded. Writing through
+// that meant `rivet project register-cli` in a fresh project edited the user's
+// global config on that project's behalf. LoadProject never leaves the project.
+func TestLoadProjectIgnoresUserLevelConfig(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".config", "rivet"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	globalPath := filepath.Join(home, ".config", "rivet", "config.yaml")
+	if err := os.WriteFile(globalPath, []byte("project_cli:\n  command: ./global\n"), 0644); err != nil {
+		t.Fatalf("write global: %v", err)
+	}
+
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir()) // a project with no .rivet/
+
+	cfg, err := LoadProject()
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+
+	// It must target the project, so a later Write can't escape it.
+	if want := filepath.Join(".rivet", "config.yaml"); cfg.path != want {
+		t.Errorf("path = %q, want %q", cfg.path, want)
+	}
+	if cfg.ProjectCLI.Command == "./global" {
+		t.Error("LoadProject picked up the user-level config")
+	}
+
+	cfg.ProjectCLI.Command = "./local"
+	if err := cfg.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// The global file must be byte-for-byte untouched.
+	got, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("reread global: %v", err)
+	}
+	if string(got) != "project_cli:\n  command: ./global\n" {
+		t.Errorf("global config was modified:\n%s", got)
+	}
+}
+
+// When the project does have a config, LoadProject uses it.
+func TestLoadProjectUsesProjectConfigWhenPresent(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(".rivet", 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".rivet", "config.yaml"), []byte("project_cli:\n  command: ./local\n"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := LoadProject()
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if cfg.ProjectCLI.Command != "./local" {
+		t.Errorf("command = %q, want ./local", cfg.ProjectCLI.Command)
+	}
 }

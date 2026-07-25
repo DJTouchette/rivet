@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,6 +105,24 @@ type CapabilityDef struct {
 	RequiresApproval bool     `yaml:"requires_approval,omitempty"`
 }
 
+// LoadProject loads the project's own config, ignoring the user-level fallback,
+// and defaults to .rivet/config.yaml when the project has none.
+//
+// Any command that WRITES config must use this rather than LoadOrDefault.
+// LoadOrDefault resolves to ~/.config/rivet/config.yaml when a project has no
+// config of its own, and cfg.path follows whatever it loaded — so writing
+// through it edits the user's global config on behalf of a single project.
+func LoadProject() (*Config, error) {
+	path := filepath.Join(".rivet", "config.yaml")
+	if _, err := os.Stat(path); err == nil {
+		return loadFrom(path)
+	}
+
+	cfg := defaultConfig()
+	cfg.path = path
+	return cfg, nil
+}
+
 // LoadOrDefault loads config from the given path, or searches common locations.
 // Search order: .rivet/config.yaml, then ~/.config/rivet/config.yaml.
 // Returns a default config if no file is found.
@@ -129,21 +148,99 @@ func LoadOrDefault(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Write saves the config to its path.
+// Write saves the config to its path, updating only the keys this struct models
+// and leaving everything else in the file untouched.
+//
+// It used to marshal the struct straight over the file, which destroyed data.
+// Config has no Schema field — the schema: section is owned by
+// internal/schema/config — so a single `rivet project register-cli` silently
+// deleted a user's database credentials and migrations config along with every
+// comment in the file. Now that schema tooling is registered based on that
+// section existing, it would also have made twelve MCP tools disappear.
 func (c *Config) Write() error {
 	if err := os.MkdirAll(filepath.Dir(c.path), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 
-	data, err := yaml.Marshal(c)
+	existing, err := os.ReadFile(c.path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading config: %w", err)
+	}
+
+	data, err := c.mergeInto(existing)
 	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+		return err
 	}
 
 	if err := os.WriteFile(c.path, data, 0644); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	return nil
+}
+
+// mergeInto renders the config over an existing YAML document, replacing the
+// values of keys the struct models and preserving unknown keys, key order, and
+// comments. An absent or unparseable document is rendered from scratch.
+func (c *Config) mergeInto(existing []byte) ([]byte, error) {
+	own, err := c.ownKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existing, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		// Nothing usable to merge into — a fresh file, or something we'd rather
+		// not half-rewrite. Render the struct alone.
+		return encodeYAML(&yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{own}})
+	}
+
+	root := doc.Content[0]
+	for i := 0; i+1 < len(own.Content); i += 2 {
+		setMappingValue(root, own.Content[i], own.Content[i+1])
+	}
+
+	return encodeYAML(&doc)
+}
+
+// ownKeys renders the struct to a mapping node, so its keys can be merged
+// individually rather than as one wholesale document.
+func (c *Config) ownKeys() (*yaml.Node, error) {
+	var n yaml.Node
+	if err := n.Encode(c); err != nil {
+		return nil, fmt.Errorf("marshaling config: %w", err)
+	}
+	if n.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("marshaling config: expected a mapping, got kind %d", n.Kind)
+	}
+	return &n, nil
+}
+
+// setMappingValue replaces the value for a key, or appends the pair when the key
+// is absent. The existing key node is kept rather than overwritten, because it
+// carries any comment the user wrote above that section.
+func setMappingValue(mapping, key, value *yaml.Node) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key.Value {
+			mapping.Content[i+1] = value
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content, key, value)
+}
+
+// encodeYAML renders a node at two-space indentation, matching the starter
+// config and ordinary YAML convention rather than yaml.Marshal's four.
+func encodeYAML(node *yaml.Node) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(node); err != nil {
+		return nil, fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return nil, fmt.Errorf("marshaling config: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // Path returns the file path this config was loaded from or will be written to.

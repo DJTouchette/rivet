@@ -2,6 +2,7 @@ package context
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -273,4 +274,88 @@ func rankNames(recs []Recommendation) []string {
 		names = append(names, r.Name)
 	}
 	return names
+}
+
+// Presence alone could not distinguish "the subject of a section" from "named
+// once in a Boundaries section that disclaims it", so a doc got retrieved for
+// the very thing its own text said belonged elsewhere.
+func TestTFBoostSaturates(t *testing.T) {
+	// One mention scores exactly as before, so nothing that used to work shifts.
+	if got := tfBoost(1); math.Abs(got-1) > 1e-9 {
+		t.Errorf("tfBoost(1) = %.6f, want exactly 1", got)
+	}
+	if got := tfBoost(0); math.Abs(got-1) > 1e-9 {
+		t.Errorf("tfBoost(0) = %.6f, want 1", got)
+	}
+
+	prev := tfBoost(1)
+	for _, n := range []int{2, 3, 5, 10, 50, 500} {
+		got := tfBoost(n)
+		if got <= prev {
+			t.Errorf("tfBoost(%d) = %.4f should exceed the previous %.4f", n, got, prev)
+		}
+		// Bounded: unbounded frequency would hand the win to whatever repeats a
+		// word most, which is exactly the keyword-stuffing this must resist.
+		if got > tfSaturationK+1 {
+			t.Errorf("tfBoost(%d) = %.4f exceeds the asymptote %.4f", n, got, tfSaturationK+1)
+		}
+		prev = got
+	}
+
+	// Diminishing returns: the step from 1->2 must exceed the step from 9->10.
+	early := tfBoost(2) - tfBoost(1)
+	late := tfBoost(10) - tfBoost(9)
+	if early <= late {
+		t.Errorf("gains should diminish: 1->2 = %.4f, 9->10 = %.4f", early, late)
+	}
+}
+
+// The end-to-end effect: a doc that merely disclaims a subject must lose to one
+// that documents it, even though both contain the word.
+func TestRecommendPrefersDensityOverAPassingMention(t *testing.T) {
+	docs := []*Document{
+		{Name: "search", Kind: KindDomain, Title: "Search Domain", Tags: []string{"search"},
+			Body: "Owns the relevance model. The pipeline that populates the index — " +
+				"mapping changes, backfills, reindexes — belongs to search-indexer."},
+		{Name: "search-indexer", Kind: KindModule, Title: "Search Index Pipeline", Tags: []string{"search"},
+			Body: "## Reindexing\nReindex is always blue/green against an alias. " +
+				"Run the reindex in batches. A full reindex takes 40 minutes."},
+		{Name: "orders", Kind: KindDomain, Tags: []string{"orders"}, Body: "Checkout and carts."},
+	}
+
+	got := Recommend(docs, "reindex", 5)
+	if len(got) == 0 {
+		t.Fatal("expected results")
+	}
+	if got[0].Name != "search-indexer" {
+		t.Errorf("the doc documenting reindexing should lead, got %q (%.3f); ranking: %v",
+			got[0].Name, got[0].Score, rankNames(got))
+	}
+}
+
+// Density must not become a keyword-stuffing exploit: repetition alone cannot
+// beat a doc that is genuinely about the subject and carries the tag.
+func TestBodyDensityCannotOutrankTagsByRepetition(t *testing.T) {
+	docs := []*Document{
+		{Name: "stuffed-faq", Kind: KindWiki,
+			Body: strings.Repeat("retry retries retry ", 40)},
+		{Name: "payment-retry", Kind: KindModule, Title: "Payment Retry Scheduler",
+			Tags: []string{"retry"},
+			Body: "The scheduler owns the retry backoff and its idempotency keys."},
+	}
+
+	got := Recommend(docs, "retry", 5)
+	if got[0].Name != "payment-retry" {
+		t.Errorf("keyword stuffing should not win, got %q (%.3f)", got[0].Name, got[0].Score)
+	}
+}
+
+// The body signal stays bounded so density can rival a tag match without
+// swamping one outright.
+func TestBodyWeightIsCapped(t *testing.T) {
+	body := strings.Repeat("reindex ", 200)
+	got, _ := scoreBodyMatch(body, []string{"reindex"})
+	if got > bodyMaxWeight+1e-9 {
+		t.Errorf("body weight %.4f exceeds the cap %.4f", got, bodyMaxWeight)
+	}
 }

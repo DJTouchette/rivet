@@ -304,35 +304,57 @@ var goldenQueries = []goldenQuery{
 // are only comparable against a fixed corpus and a fixed golden set, so the
 // numbers below cannot be read against the ones above.
 //
-// Current measurement — 36 goldens, 21-doc corpus, with IDF weighting:
+// TERM FREQUENCY — the IDF work above left term frequency binary: a doc was
+// asked whether a token appeared, never how much of it was about that token.
+// That could not tell "the subject of a section" from "named once in a
+// Boundaries section that disclaims it", which is how the search domain — whose
+// own text says reindexes belong to search-indexer — outranked search-indexer
+// for a reindexing query. A doc was retrieved for the thing it explicitly
+// disowned, and that pattern is common in exactly the best-written docs.
 //
-//	recall@1 = 0.917 (33/36)   recall@3 = 1.000 (36/36)
-//	recall@5 = 1.000 (36/36)   MRR      = 0.958
+// scoreBodyMatchWeighted now applies BM25-shaped saturating term frequency.
+// Saturating rather than linear: unbounded frequency would hand the win to
+// whatever repeats a word most, which is the keyword-stuffed FAQ this corpus
+// exists to guard against.
+//
+// Current measurement — 36 goldens, 21-doc corpus, IDF + saturating TF:
+//
+//	recall@1 = 0.944 (34/36)   recall@3 = 1.000 (36/36)
+//	recall@5 = 1.000 (36/36)   MRR      = 0.972
 //
 // The thresholds below are set AT those values, deliberately, so the test
 // passes today and can only fail on a regression. They are a floor, not a goal.
 // Raise them when a change moves them up.
 //
-// Three goldens still miss at rank 1, all landing at rank 2:
+// Notably, TF rescued "the same charge is declined instantly on every repeat" —
+// the query labelled as the case only embeddings could reach. Term density got
+// there without them, which moves where the semantic signal actually earns its
+// keep.
 //
-//   - "reindex the product catalogue" and "an analyzer change altered ranking"
-//     both put `search` above `search-indexer`. The domain holds a tag matching
-//     a query token that the module doesn't tag, and a tag is worth 0.5 against
-//     body's 0.2, so body evidence cannot close the gap however rare its tokens
-//     are. Fixing it means either inflating the noisiest signal or hard-coding
-//     kind specificity. Both labels are also genuinely contestable — the search
-//     domain really does own ranking. Left alone rather than overfitted to.
-//   - "the same charge is declined instantly on every repeat" has almost no
-//     literal overlap with its target. This is the query class the semantic
-//     signal exists for, and it marks how far pure lexical matching reaches.
+// Two goldens still miss at rank 1, both landing at rank 2, and they fail for
+// DIFFERENT reasons — worth keeping straight before anyone tunes at them:
+//
+//   - "reindex the product catalogue" is a near-tie: 0.663 vs 0.644 after TF
+//     narrowed it from a 0.083 gap. The remainder is the domain's title
+//     matching "product". Closing 0.019 means turning an arbitrary knob, and
+//     the two docs genuinely are both relevant. Left alone deliberately.
+//   - "an analyzer change altered ranking" is NOT a scorer defect. search-indexer
+//     is under-tagged: its body says analyzer changes alter relevance, but it
+//     tags neither `relevance` nor `ranking`, so the domain wins on an explicit
+//     authoring signal the module never gave. Verified by adding those two tags
+//     to the fixture, which flips the query to rank 1 (reverted — fitting the
+//     corpus to the test would defeat the point). The real fix is a lint rule
+//     that flags a doc whose body features a term absent from its tags. Do not
+//     "fix" this in the scorer: that would mean overriding explicit tags with
+//     implicit body evidence, which is backwards.
 //
 // recall@3 and @5 are at ceiling again. The discriminating power is at @1 and
 // MRR; if those saturate, add harder goldens rather than declaring victory.
 const (
-	baselineRecallAt1 = 0.917
+	baselineRecallAt1 = 0.944
 	baselineRecallAt3 = 1.000
 	baselineRecallAt5 = 1.000
-	baselineMRR       = 0.958
+	baselineMRR       = 0.972
 
 	// evalEpsilon absorbs float64 formatting noise when comparing a freshly
 	// computed metric against a constant literal rounded to three places.

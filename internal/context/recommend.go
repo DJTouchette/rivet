@@ -618,6 +618,31 @@ func scoreBodyMatch(body string, tokens []string) (float64, string) {
 	return scoreBodyMatchWeighted(body, tokens, nil)
 }
 
+// Term-frequency saturation, the BM25 shape. tfBoost(1) is exactly 1, so a doc
+// mentioning a term once scores as it always did; further mentions add real but
+// sharply diminishing weight, approaching tfSaturationK+1.
+//
+// Saturation is the whole point. Presence alone could not tell "the subject of a
+// section" from "named once in a Boundaries section that disclaims it" — which
+// is how a domain doc saying "reindexes belong to search-indexer" came to
+// outrank search-indexer for a query about reindexing. Unbounded frequency
+// would fix that and hand the win to whatever repeats a word most, which is the
+// keyword-stuffed FAQ the fixture corpus exists to guard against.
+const tfSaturationK = 1.2
+
+// bodyMaxWeight caps the body signal so density can make it competitive with a
+// tag match without letting it dominate one outright. Tags are still a
+// deliberate authoring act; body text is not.
+const bodyMaxWeight = 0.45
+
+func tfBoost(occurrences int) float64 {
+	if occurrences <= 1 {
+		return 1
+	}
+	n := float64(occurrences)
+	return n * (tfSaturationK + 1) / (n + tfSaturationK)
+}
+
 // scoreBodyMatchWeighted scores body coverage weighted by token rarity.
 //
 // Plain coverage (matched/total) treated every token alike, so a broad doc
@@ -645,9 +670,9 @@ func scoreBodyMatchWeighted(body string, tokens []string, idf map[string]float64
 		}
 		totalWeight += w
 
-		if strings.Contains(bodyLower, stemProbe(tok)) {
+		if n := strings.Count(bodyLower, stemProbe(tok)); n > 0 {
 			matches++
-			matchedWeight += w
+			matchedWeight += w * tfBoost(n)
 		}
 	}
 
@@ -655,10 +680,17 @@ func scoreBodyMatchWeighted(body string, tokens []string, idf map[string]float64
 		return 0, ""
 	}
 
+	// Coverage can now exceed 1: a doc densely about the query earns more than
+	// one that merely contains it. The cap is what keeps that bounded.
 	coverage := matchedWeight / totalWeight
-	weight := 0.2 * coverage
+	base := 0.2
 	if matches == len(tokens) {
-		weight = 0.3 // all tokens found in body
+		base = 0.3 // all tokens found in body
+	}
+
+	weight := base * coverage
+	if weight > bodyMaxWeight {
+		weight = bodyMaxWeight
 	}
 
 	return weight, "body-match"

@@ -40,9 +40,13 @@ extracted later.
 
 ## Failure modes
 
-- `pullSnapshot` hard-fails on `Ping`, `LoadSchema` or `IndexUsage`, but
-  **swallows** errors from `MissingIndexHints` and `SlowQueries` and stores nil.
-  A missing `pg_stat_statements` therefore looks exactly like a quiet server.
+- `pullSnapshot` hard-fails on `Ping`, `LoadSchema` or `IndexUsage`, but treats
+  the optional sections — `MissingIndexHints`, `SlowQueries` — as recoverable,
+  recording a `cache.Gap` rather than failing the whole snapshot. That split is
+  deliberate: pg_qualstats and pg_stat_statements are absent on plenty of
+  healthy databases, so hard-failing would take `tables` and `describe` down
+  with them. Gaps persist into the snapshot file, so a cached read tomorrow sees
+  the same hole instead of a zero.
 - `migrations.Parse` records a filename in `Unparsed` and continues when it
   meets SQL it doesn't understand; only a filesystem read error aborts. A
   half-parsed schema is reported as success with a count you have to look at.
@@ -57,6 +61,14 @@ extracted later.
   don't exist because they're absent from the main config struct is the single
   easiest wrong turn here — and it is why `rivet project register-cli` silently
   deletes the section (see [[cli]]).
+- **An empty result and an uncaptured one are different answers.** A gap on
+  `slow_queries` or `missing_index_hints` means "unknown", not "none", and the
+  commands whose entire output *is* that section say so explicitly. Gaps carry a
+  `Kind`: `unavailable` (the driver reported `catalog.ErrNotSupported` — a fact
+  about the database, no action) versus `failed` (permission denied, broken
+  stats view, timeout — somebody's bug). The Postgres driver used to return
+  `(nil, nil)` for both a missing extension and a failed query, so the CLI could
+  not have distinguished them even if it had tried.
 - **Snapshots expire, and the age is always on screen.** `loadOrFetch` checks
   `FetchedAt` against `schema.cache.max_age` (default 24h; `0s` means never read
   from cache). A missing `FetchedAt` counts as stale — an unknown age is not a
@@ -76,9 +88,15 @@ extracted later.
 - **Migrations are not a fallback.** `schema migrations` reconstructs a schema
   with no DB, but `tables`, `describe`, `indexes *`, `coverage` and
   `queries slow` all go through `loadOrFetch` and fail without a snapshot. They
-  never fall back to the migration-derived schema. `schema migrations` also uses
-  only `AllDirs()[0]`, and `schema overview` stops at the first directory that
-  parses — extra migration dirs are silently ignored.
+  never fall back to the migration-derived schema.
+- **Multiple migration roots merge; they do not interleave.** `ParseAll` replays
+  roots in configured order (`dir`, then `dirs`), lexical within a root, sharing
+  one parser so a later root can `ALTER` an earlier root's table. Filenames are
+  deliberately *not* sorted globally across roots — two roots are two
+  independent numbering spaces, and a global sort would invent an order nobody
+  wrote. A filename appearing in two roots is reported in `Summary.Warnings`
+  rather than silently resolved, and a root that fails to read is reported
+  per-root while the rest still merge.
 - **`--limit` is a capture-time parameter, not a display one.** `pullSnapshot`
   once hard-coded `cat.SlowQueries(ctx, 25)`, so the flag could only slice the
   cached 25 down and asking for 50 got you 25. The requested limit now travels

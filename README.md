@@ -486,9 +486,30 @@ rivet schema indexes unused   Indexes with zero reads
 rivet schema indexes missing  Missing-index candidates (engine + code)
 rivet schema refresh          Re-pull catalog snapshots
 rivet project init-cli        Scaffold a starter project CLI
-rivet project register-cli    Register your project CLI
+rivet project register-cli    Register your project CLI (--discover, --force)
 rivet project commands        List project CLI commands
+rivet project run <cap>       Run a registered capability
 ```
+
+### Registering a Project CLI
+
+`register-cli` takes a path in the repo or a bare command name resolved on PATH,
+and asks it for its capabilities:
+
+```bash
+rivet project register-cli ./tools/projectcli/projectcli
+rivet project register-cli mix --discover project.rivet_discover
+```
+
+`--discover` sets the argv appended to the command (default `rivet-discover`),
+and is persisted, so you pass it once. It exists because not every CLI can host
+a top-level subcommand — a Mix task lives inside the project's namespace.
+
+Re-running refreshes what discovery legitimately owns: description, command and
+output. Safety is only tightened, never loosened — if your CLI now reports a
+looser level than the manifest, it's reported and skipped unless you pass
+`--force`. Typed params you added by hand are never touched, and comments in
+`.rivet/capabilities.yaml` survive.
 
 ## Claude Code Skills
 

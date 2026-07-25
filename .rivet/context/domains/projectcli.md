@@ -59,32 +59,59 @@ see [[capabilities]] and [[tool-embedding]].
   `RunCapability` gates only `dangerous`, and the MCP server offers the `approve`
   argument only for `dangerous`. Explicitly declared levels are left alone, so
   labelling your commands is how you get out of the approval prompt.
-- **`register-cli` merges by name and never updates.** Existing manifest entries
-  are skipped outright, so re-running it after changing a description or safety
-  level in your discover output does nothing. Only `cli:` is overwritten.
-- **The absolute-path strip is exact string equality.** The generated discover
-  command emits `os.Executable()` (which resolves symlinks), while `register-cli`
-  strips using `filepath.Abs` of the path *you typed* (which does not). When
-  those differ, the strip silently doesn't happen and the absolute binary path
-  survives as `Command[0]` in the manifest — then `ToCapabilities` prepends
-  `cli:` on top, so the tool runs as `<cli> /abs/path/<cli> query status`.
+- **Re-registering refreshes, but not in the loosening direction.**
+  `MergeManifest` refreshes `description`, `command` and `output` — mechanical
+  facts only the CLI knows, where a stale value preserves a bug rather than a
+  preference. `safety` refreshes only when discovery is *stricter*; a discovered
+  level that would relax the manifest is reported and skipped unless `--force`,
+  because silently accepting a loosening would reopen the fail-open hole that
+  defaulting unlabelled capabilities to `dangerous` closed. `params` are never
+  touched: they can't appear in discovery output, so rewriting them can only
+  destroy work. It previously skipped existing entries entirely, making the
+  discover contract write-once.
+- **The manifest merge edits the YAML node tree, like config does.** It used to
+  `yaml.Marshal` over the file, erasing every comment — including the starter
+  block documenting param types — and re-rendering params with `default: ""`
+  noise. Same class of bug as `Config.Write`; see [[cli]]. An unparseable
+  manifest is now an error rather than something to overwrite.
+- **Path comparison resolves symlinks on both sides.** `StripBinaryPrefix` uses
+  `filepath.EvalSymlinks`, falling back to `filepath.Abs` when resolution fails,
+  and requires one side to exist on disk so a subcommand token can never be
+  eaten. Exact string equality used to no-op whenever the discover command's
+  `os.Executable()` (symlinks resolved) differed from the `filepath.Abs` of the
+  path you typed (not resolved), leaving an absolute path as `Command[0]` that
+  `ToCapabilities` then prefixed with `cli:` again.
 - **`--lang` auto-detection has five outcomes but only two code paths.**
   `detectProjectLanguage` returns elixir/go/node/rust/python/ruby;
   `newProjectInitCLICmd` switches on `"elixir"` and sends *everything else* to
   the Go scaffold. A Node or Python repo gets a Go cobra module and a `go.mod`.
-- **The Elixir discover task is unreachable.** The scaffold generates
-  `mix <ns>.rivet_discover`, but `RunDiscover` always execs the fixed argv
-  `["rivet-discover"]` against a binary path. Elixir capabilities come from
-  `StarterManifestElixir` (`cli: mix`) at scaffold time and are edited by hand
-  from then on.
+- **The discover command is argv, not a single token.** `project_cli.discover`
+  holds the arguments appended to `command`, defaulting to `["rivet-discover"]`.
+  It exists because not every CLI can host a top-level subcommand: the Elixir
+  scaffold's task lives in the project's Mix namespace (`mix <ns>.rivet_discover`),
+  so the old fixed argv meant discovery reported "no rivet-discover support" for
+  every Elixir project. Register with
+  `register-cli mix --discover project.rivet_discover`; the flag persists.
+- **Mix prints "Compiling…" to stdout**, so the first discovery after any edit
+  arrives as chatter followed by JSON. `parseDiscoverOutput` retries from the
+  first `{`. Without that, Elixir registration fails on the first run and
+  succeeds on the second, which is a maddening thing to debug.
+- **`register-cli` accepts a bare command name**, resolved on PATH, and records
+  the bare name — `command: mix`, not one machine's toolchain path. A file on
+  disk still wins, so existing usage is unchanged.
 - `initElixirCLI` rewrites the default name `projectcli` to `project`, because
   the name becomes a Mix task namespace. Your Go and Elixir scaffolds of the
   "same" project therefore produce differently-named capabilities.
 - The scaffolded Go module is a **separate module** with its own pinned
   toolchain (`go 1.23`, cobra v1.9.1) — it is not built by rivet's `go build`
   and does not share rivet's dependency versions. See [[stack]].
-- `DiscoverCapabilities` and `DiscoverElixirCapabilities` are dead. The former's
-  comment claims register-cli uses it "when the binary hasn't been built yet";
-  register-cli only ever calls `RunDiscover`. Don't edit them expecting an effect.
-- `init-cli` refuses to run without `.rivet/`; `register-cli` has no such check,
-  which is how it ends up writing to the global config (see [[cli]]).
+- `DiscoverCapabilities` is dead. Its comment claims register-cli uses it "when
+  the binary hasn't been built yet"; register-cli only ever calls `RunDiscover`.
+  Don't edit it expecting an effect. Its Elixir twin was deleted for being a
+  third hardcoded copy of the same capability list — after the discover-task
+  template and `StarterManifestElixir` — which is exactly where safety levels
+  drift apart unnoticed.
+- `init-cli` refuses to run without `.rivet/`; `register-cli` has no such check.
+  That used to mean it wrote to the user's global config; `LoadProject` now keeps
+  writes inside the project regardless, so the missing check is harmless. See
+  [[cli]].

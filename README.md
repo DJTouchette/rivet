@@ -69,16 +69,15 @@ related_paths:
 ## Overview
 Handles invoice generation, retry logic, and failure handling...
 
+## Failure modes
+- Retries stop silently after the third attempt. Nothing alerts.
+
 ## Gotchas
 - Retry logic is split between the scheduler and the adapter
 - Status names in the DB don't match the API. Obviously.
-
-## Learnings
-- 2026-04-01: A trigger fires 2 queries per insert, watch for N+1
-- 2026-04-03: Hidden dependency on ThirdPartyCheck table for validation
 ```
 
-The `## Learnings` section is where Claude appends new findings. When it grows too long, the `/rivet-compact-context` skill promotes the important stuff to permanent sections and clears the noise.
+Context docs are the **curated** tier: deliberately edited, kept short, reviewed. Claude doesn't scribble in them mid-task — raw findings land in a separate capture layer and get promoted in later, on purpose. That's [the feedback loop](#the-feedback-loop).
 
 Context docs are exposed as MCP resources, so Claude can pull the right domain knowledge before making changes. The recommendation engine scores docs by tag matches, file path globs, and keyword relevance, so Claude doesn't have to guess which context to read.
 
@@ -177,30 +176,57 @@ This is where it gets interesting.
 ```
 You start a task
     → Claude investigates using recon tools (grep, symbols, related files)
-    → After a few searches, a hook nudges: "hey, check the context docs first"
+    → A nudge fires: "hey, check the context docs first"
     → Claude reads the orders domain doc, finds the gotchas
     → Saves 10 minutes of blind exploration
     → Discovers something new during the task
-    → Another hook nudges: "learned anything? write it down"
-    → Claude appends the finding to the right domain file
-    → Context doc gets too long eventually
-    → Claude summarizes, promotes the good stuff, trims the noise
+    → Another nudge: "learned anything? write it down"
+    → Claude calls rivet.learn → one small file in .rivet/learnings/
+    → The log accumulates entries
+    → /rivet-promote-learnings reviews them, merges the good ones
+      into context docs, archives the rest
     → Next session starts with better knowledge
 ```
 
-The context files are just markdown in `.rivet/context/`. You can read them, edit them, commit them. They're not magic. They're documentation that happens to maintain itself.
+Capture and curation are deliberately **two separate layers**, because they want opposite things. Capture should be cheap and always-available; curation should be picky.
+
+**Capture — `.rivet/learnings/`.** One file per entry, named `YYYY-MM-DD-<slug>-<id>.md` — so two agents recording findings at the same moment never collide on a shared section. Claude writes them with `rivet.learn` (title and observation required, everything else optional); you write them with `rivet learnings add`:
+
+```markdown
+---
+title: ServiceRenderedInsertTrigger fires 5 queries per insert
+date: 2026-04-01
+confidence: high
+suggested_doc: orders            # a hint, not a decision
+related_paths:
+  - backend/Handlers/Workflow/**
+promoted: false                  # ← the whole state machine
+---
+
+# ServiceRenderedInsertTrigger fires 5 queries per insert
+
+## Observation
+## Impact
+## Recommendation
+```
+
+**Curation — `/rivet-promote-learnings`.** A separate, deliberate pass. It walks the active entries and decides, one by one: promote, merge with a sibling entry, or archive. Promoting means the content gets merged into the right context doc as a concise bullet and the entry is stamped `promoted: true` / `promoted_to: <doc>` (`rivet learnings promote <name> --to <doc> --archive`, which can also move the file into `.rivet/learnings/archive/`).
+
+Not every learning earns permanence. Most don't. `promoted: true` is what keeps a reviewed entry from being re-litigated every session, and it's what the "your log is getting long" nudge counts against.
+
+The context files are just markdown in `.rivet/context/`, and so is the learning log. You can read them, edit them, commit them. They're not magic. They're documentation that happens to maintain itself.
 
 ### The Nudging System
 
 Rivet doesn't just provide tools. It shapes how Claude uses them.
 
-**After 2+ recon searches without reading context:** "You're exploring blind. Check the context docs, someone already figured this out."
+**Exploring with recon before reading any context doc:** "You're exploring blind. Check the context docs, someone already figured this out."
 
-**After 5+ investigations without recording a finding:** "You've been digging for a while. Learn anything worth writing down?"
+**A sustained investigation with nothing recorded:** "You've been digging for a while. Learn anything worth writing down? Call `rivet.learn`."
 
-**After a doc hits 8+ learnings or 60+ lines:** "This doc is getting chunky. Time to consolidate."
+**A learning log with a real backlog of un-promoted entries:** "Time to review. Run `/rivet-promote-learnings`."
 
-These are Claude Code hooks that fire automatically. They create a natural rhythm: explore, check existing knowledge, investigate, record what you found, keep docs clean.
+They come from the MCP server itself — it already sees every tool call — and they create a natural rhythm: check existing knowledge, investigate, record what you found, promote what mattered.
 
 ## Recon: Codebase Intelligence
 
@@ -223,6 +249,7 @@ Claude calls these instead of running raw `grep` and hoping for the best. Recon 
 | `recon.grep` | Enriched grep with definition/reference/test/comment classification |
 | `recon.related` | Files related to a path (imports, co-change, naming, test pairs) |
 | `recon.symbols` | Search or list functions, types, classes |
+| `recon.callers` | Where a symbol is defined, and every call site referencing it |
 | `recon.context` | File preview, fan-in/fan-out, churn, hotspot score |
 | `recon.hotspots` | Top files ranked by risk (fan-in * churn) |
 | `recon.tests` | Find test files for a source file |
@@ -328,6 +355,25 @@ rally done <id>               Mark done and unpin
 rally pinned                  List pinned tickets (working context)
 ```
 
+## Which Tools You Actually Get
+
+Not all of them, and that's deliberate. Every tool definition is context window spent in every session, before any work happens. Twelve database tools in a project with no database aren't just noise — every call would fail anyway.
+
+So `recon.*` and `witness.*` are always on: they need no configuration and work in any git repo. `schema.*` and `vaulty.*` are registered only when rivet can see you're using them. A bare project gets 16 built-in tools instead of 34; rivet's own `rivet.*` context tools are there either way.
+
+- **`schema.*` (12 tools)** appears once the `schema:` section of `.rivet/config.yaml` names something to read — a database, a migrations dir, or a code-scan root.
+- **`vaulty.*` (6 tools)** appears once a vault exists: `./vaulty.{toml,yaml,yml}`, `.vaulty/`, or `~/.config/vaulty/`.
+
+Detection is a default, not a verdict. The `tools:` section overrides it in either direction:
+
+```yaml
+tools:
+  schema: true     # force on
+  vaulty: false    # force off — omit a key entirely to auto-detect
+```
+
+Forcing `vaulty: true` is the common case: creating the first vault is a human step (`rivet vaulty init`), so on a fresh project the tools would otherwise stay hidden until after you've bootstrapped it.
+
 ## Safety Levels
 
 Every capability has a classification:
@@ -373,13 +419,14 @@ Claude calls `db.revenue-summary` instead of writing SQL from vibes.
 ## Commands
 
 ```
-rivet init                    Set up .rivet/, install hooks and skills
+rivet init                    Set up .rivet/, install skills and subagents
 rivet update                  Add any missing Rivet files without overwriting config.yaml
 rivet serve                   Start the MCP server (auto-started by Claude Code)
 rivet sync                    Regenerate CLAUDE.md from your config and context
 rivet doctor                  Check that everything's wired up correctly
 rivet inspect capabilities    List what's registered and its safety level
-rivet run <capability>        Run a capability from the terminal
+rivet project run <cap>       Run a capability from the terminal
+rivet run <args...>           Pass through to your registered project CLI
 rivet context list            List context docs
 rivet context show <name>     Read one
 rivet context scaffold        Generate starter docs from recon analysis
@@ -390,13 +437,19 @@ rivet runbook list            List runbooks and their triggers
 rivet runbook draft <title>   Draft a runbook for human review (--steps, --trigger)
 rivet runbook promote <name>  Promote a reviewed draft into an active runbook
 rivet context lint            Check docs for quality and staleness
+rivet learnings add <title>   Record a learning (--observation required)
+rivet learnings list          Active (un-promoted) entries (--all, --json)
+rivet learnings show <name>   Read one entry
+rivet learnings promote <n>   Mark promoted into a doc (--to, --archive)
 rivet policy status           Show active policies
+rivet policy check <cap>      Evaluate policies against one capability
 rivet schema overview         Configured databases + migration summary
 rivet schema tables           List tables
 rivet schema describe <tbl>   Columns, indexes, FKs for a table
 rivet schema indexes unused   Indexes with zero reads
 rivet schema indexes missing  Missing-index candidates (engine + code)
 rivet schema refresh          Re-pull catalog snapshots
+rivet project init-cli        Scaffold a starter project CLI
 rivet project register-cli    Register your project CLI
 rivet project commands        List project CLI commands
 ```
@@ -405,16 +458,17 @@ rivet project commands        List project CLI commands
 
 Installed by `rivet init`, run them with `/` in Claude Code:
 
-- **`/rivet-setup`** : Full onboarding. Init, scaffold, fill context, sync.
-- **`/rivet-fill-context`** : Have Claude fill out placeholder context docs using recon.
-- **`/rivet-compact-context`** : Consolidate learnings, prune stale info, keep docs tight.
+- **`/rivet-setup`** : Full onboarding. `rivet init`, scaffold, fill the placeholder docs, `rivet sync`.
+- **`/rivet-fill-context`** : Fill out placeholder context docs using recon. Overview, key modules, failure modes, gotchas — written for an AI reader, 20-40 lines a doc.
+- **`/rivet-promote-learnings`** : Work the learning log. Promote, merge, or archive each entry; update the target context docs; mark what was promoted.
+- **`/rivet-compact-context`** : Curated layer only. Run `rivet context lint`, trim docs back under ~50 lines, delete gotchas that got fixed, bump `last_reviewed`. It'll point you at `/rivet-promote-learnings` if what you actually wanted was the log.
 
 ## Claude Code Agents
 
 Installed by `rivet init` into `.claude/agents/`:
 
 - **`rivet-explorer`**: A strictly read-only investigation subagent. Tool access is limited to Claude read tools plus read-only Rivet MCP tools.
-- **`rivet-investigator`**: The same investigation workflow, but also allowed to call `rivet.learn` to record durable non-obvious findings in context docs.
+- **`rivet-investigator`**: The same investigation workflow, but also allowed to call `rivet.learn` to record durable non-obvious findings to the learning log.
 
 ## Building
 

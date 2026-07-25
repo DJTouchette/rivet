@@ -57,22 +57,35 @@ extracted later.
   don't exist because they're absent from the main config struct is the single
   easiest wrong turn here — and it is why `rivet project register-cli` silently
   deletes the section (see [[cli]]).
-- **The snapshot cache has no TTL.** `loadOrFetch` returns the cached entry if
-  the file merely *exists*. `FetchedAt` is written and never read anywhere in
-  the repo. Once `.rivet/schema/<name>.json` exists, nothing re-dials the
-  database until someone runs `schema refresh`, so stale index-usage counters
-  are the default state, not an edge case.
-- **`schema overview` never connects.** It reports `Connected: true` purely
-  because a snapshot file loaded. "connected" there means "we have a snapshot".
+- **Snapshots expire, and the age is always on screen.** `loadOrFetch` checks
+  `FetchedAt` against `schema.cache.max_age` (default 24h; `0s` means never read
+  from cache). A missing `FetchedAt` counts as stale — an unknown age is not a
+  safe age — and a future timestamp clamps to zero rather than going negative on
+  clock skew. Every cached-data command prints the snapshot's age, inline on
+  stdout in human mode and on stderr in JSON mode so stdout stays one parseable
+  document. Don't add a command that reads a snapshot without reporting
+  freshness; that was the original bug, where weeks-old index counters looked
+  exactly like live ones.
+- **Unreachable DB plus an existing snapshot serves the snapshot, loudly.** A
+  deliberate choice: schema questions are mostly still answerable from old data,
+  so labelled-stale beats a hard error. No snapshot and no DB *is* an error.
+- **`schema overview` pings; everything else doesn't.** `Connected` used to be
+  set purely because a snapshot file loaded, claiming a connection never made.
+  It now reflects a real ping, on a shorter timeout than the query path because
+  overview dials every configured database.
 - **Migrations are not a fallback.** `schema migrations` reconstructs a schema
   with no DB, but `tables`, `describe`, `indexes *`, `coverage` and
   `queries slow` all go through `loadOrFetch` and fail without a snapshot. They
   never fall back to the migration-derived schema. `schema migrations` also uses
   only `AllDirs()[0]`, and `schema overview` stops at the first directory that
   parses — extra migration dirs are silently ignored.
-- **`schema queries slow --limit N` can only shrink the result.**
-  `pullSnapshot` hard-codes `cat.SlowQueries(ctx, 25)`, and the flag just slices
-  the cached 25 down. Asking for 50 gets you 25.
+- **`--limit` is a capture-time parameter, not a display one.** `pullSnapshot`
+  once hard-coded `cat.SlowQueries(ctx, 25)`, so the flag could only slice the
+  cached 25 down and asking for 50 got you 25. The requested limit now travels
+  with the request and is recorded on the entry, so a snapshot captured with a
+  smaller limit is *insufficient* for a larger one and re-dials — a second gate
+  entirely separate from freshness. A capture never takes fewer than 25 rows, so
+  an incidental `--limit 1` can't poison the shared snapshot.
 - Every `schema.*` capability is `SafetyLevelSafe`, including `schema.refresh` —
   the one command that always opens a connection. That is deliberate (read-only
   catalog queries), but it does mean an agent can dial your configured database

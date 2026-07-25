@@ -66,18 +66,21 @@ subcommands in four groups:
 - **`rivet run` and `rivet project run` are unrelated commands.** `run` has
   `DisableFlagParsing` and forwards argv verbatim to `project_cli.command`.
   `project run` looks up a registered capability, checks policy, and executes it.
-- **`rivet project run` cannot run `witness.*` or `schema.*`.** `serve.go`
-  registers four in-process runners (vaulty, recon, witness, schema);
-  `newProjectRunCmd` registers only vaulty and recon. A builtin whose
-  `Command[0]` has no runner falls through to `os/exec` and goes looking for a
-  `witness` binary on PATH. Use `rivet witness ...` / `rivet schema ...` or the
-  MCP tools instead. See [[tool-embedding]].
-- **The sibling CLI subtrees use a different recon cache than the MCP tools.**
-  `internal/recon/recon.go` and `internal/witness/witness.go` prepend
-  `--cache-dir .rivet/recon` before the caller's args; `internal/cli/recon.go`
-  and `internal/cli/witness.go` attach the sibling's root command untouched, so
-  they fall back to recon's own default `<root>/.recon/`. `rivet recon refresh`
-  from a shell does not refresh the index the MCP server reads.
+- **Every executor comes from `newExecutor`, and it must stay that way.**
+  `serve` and `project run` once built their own, and the second one registered
+  only two of the four in-process runners — so `rivet project run witness.select`
+  fell through to `os/exec` and hunted for a `witness` binary on PATH. There is
+  now one construction site, guarded by a test that fails if a second appears
+  and another that requires every builtin to have a runner. Register a new
+  sibling tool there, not in a caller. See [[tool-embedding]].
+- **The CLI subtrees rewrite `--cache-dir`'s default rather than prepending an
+  argument.** `useRivetCacheDir` in `internal/cli/recon.go` walks the sibling's
+  command tree and repoints the flag at `.rivet/recon`, so an explicit
+  `--cache-dir` passed by the user still wins (pflag parses afterwards). It has
+  to check both `PersistentFlags()` and `Flags()` at every level, because recon
+  binds the flag persistently on its root while witness binds it per subcommand.
+  Before this, `rivet recon` maintained a second `<root>/.recon/` index that the
+  MCP server never read.
 - **`register-cli` is the only command that writes `.rivet/config.yaml`, and it
   rewrites the whole file.** `Config.Write` marshals the Go struct, so every
   comment and every key the struct doesn't model is dropped — including the

@@ -288,7 +288,18 @@ schema:
   code_scan:
     roots: [./src, ./backend]
     languages: [csharp, go]      # optional filter
+  cache:
+    max_age: 24h                 # snapshots older than this get re-read
 ```
+
+Catalog reads are cached to a local snapshot so repeated questions don't dial
+your database. Snapshots expire after `max_age` (default 24h — DDL moves per
+deploy, but index-usage counters drift continuously, and an "unused index"
+verdict describing last week's traffic is worse than useless). Every command
+tells you how old its snapshot is, and says so on stderr in JSON mode so stdout
+stays parseable. If the database is unreachable and a snapshot exists, you get
+the stale data with a warning rather than an error — schema questions are mostly
+still answerable from old data. `rivet schema refresh` forces a re-read.
 
 **Tools exposed via MCP:**
 

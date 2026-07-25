@@ -270,6 +270,10 @@ capabilities: []
 #     roots: [./src, ./backend]     # where to look for SQL-bearing source
 #     languages: [csharp, go]       # optional filter
 #     exclude: ["**/node_modules/**", "**/bin/**"]
+#   cache:
+#     max_age: 24h                  # re-read the catalog once a snapshot is
+#                                   # older than this. 0s never uses the cache.
+#                                   # Every command prints the snapshot's age.
 
 # Policies — rules that gate capability execution based on environment.
 # Each policy has a match (which capabilities it applies to) and constraints.

@@ -50,10 +50,15 @@ see [[capabilities]] and [[tool-embedding]].
 
 ## Gotchas
 
-- **Discovered capabilities default to `safe`.** `RunDiscover` back-fills
-  `kind: project_command`, `output: json` and `safety: safe` on any entry that
-  omits them. A project CLI that reports a destructive command without a
-  `safety` field gets it registered as auto-runnable.
+- **Discovered capabilities default to `dangerous`, on purpose.** `applyDefaults`
+  back-fills `kind: project_command` and `output: json` quietly, but an omitted
+  `safety` becomes `dangerous` and warns on stderr. It used to default to `safe`,
+  which meant a project CLI reporting a destructive command without a `safety`
+  field got it registered as auto-runnable — fail-open on the one axis that has
+  to fail closed. Note `guarded` would not have been enough: nothing enforces it.
+  `RunCapability` gates only `dangerous`, and the MCP server offers the `approve`
+  argument only for `dangerous`. Explicitly declared levels are left alone, so
+  labelling your commands is how you get out of the approval prompt.
 - **`register-cli` merges by name and never updates.** Existing manifest entries
   are skipped outright, so re-running it after changing a description or safety
   level in your discover output does nothing. Only `cli:` is overwritten.

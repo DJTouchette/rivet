@@ -1,8 +1,10 @@
 package context
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -274,12 +276,19 @@ func globMatchesAnything(pattern, root string) bool {
 // findStaleReferences extracts backtick-quoted paths from body text
 // and returns those that don't exist on disk.
 func findStaleReferences(body, root string) []string {
-	var stale []string
+	var missing []string
 	seen := make(map[string]bool)
 
 	for _, line := range strings.Split(body, "\n") {
-		refs := extractBacktickPaths(line, root)
-		for _, ref := range refs {
+		// A line that says the thing is gone is documenting history, and the
+		// file's absence is the point of the sentence. Flagging
+		// "`pipelines/templates/deploy-stage.yml` is retired" as a stale
+		// reference asks the author to delete the fact they went out of their
+		// way to record.
+		if describesRemoval(line) {
+			continue
+		}
+		for _, ref := range extractBacktickPaths(line, root) {
 			if seen[ref] {
 				continue
 			}
@@ -291,12 +300,100 @@ func findStaleReferences(body, root string) []string {
 				clean := strings.TrimSuffix(ref, "/")
 				fullClean := filepath.Join(root, clean)
 				if _, err := os.Stat(fullClean); os.IsNotExist(err) {
-					stale = append(stale, ref)
+					missing = append(missing, ref)
 				}
 			}
 		}
 	}
-	return stale
+	return dropIgnoredPaths(missing, root)
+}
+
+// removalWords mark a sentence as being about something that no longer exists.
+var removalWords = []string{
+	"retired", "removed", "deleted", "no longer", "used to", "formerly",
+	"replaced by", "superseded", "legacy", "deprecated", "was moved",
+	"renamed to", "renamed from", "gone", "obsolete",
+}
+
+// describesRemoval reports whether a line is documenting the absence of what it
+// names, rather than pointing at something a reader should go and open.
+//
+// Only the prose is examined; backtick-quoted spans are stripped first. The
+// signal lives in the sentence around the path, never in the path itself, and
+// reading the identifier gets it backwards: `lib/billing/deleted_file.ex` and
+// anything under a `legacy/` directory would otherwise exempt themselves from
+// the very rule that should catch them.
+func describesRemoval(line string) bool {
+	var prose strings.Builder
+	for i, part := range strings.Split(line, "`") {
+		if i%2 == 0 { // even indices are outside backticks
+			prose.WriteString(part)
+			prose.WriteByte(' ')
+		}
+	}
+	lower := strings.ToLower(prose.String())
+	for _, w := range removalWords {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropIgnoredPaths removes paths that git is deliberately not tracking.
+//
+// A missing file is only evidence of a stale document if the file was ever
+// supposed to be there. Build outputs, runtime state and local config are all
+// legitimately absent from a clean checkout and legitimately named in prose —
+// "state lives in `qa/workbench/proposals.json`" is exactly the kind of thing a
+// context doc exists to say, and it is gitignored precisely because it is
+// generated. On one real project every single stale-reference warning was of
+// this kind: a gitignored build artifact, gitignored runtime state, gitignored
+// local env file, and one sentence about a retired pipeline template. A rule
+// that is wrong four times out of four teaches people to skip the whole lint.
+//
+// git check-ignore is used rather than parsing .gitignore because the rules
+// nest — that project had .gitignore, qa/.gitignore and qa/workbench/.gitignore
+// all contributing — and reimplementing those semantics to save one subprocess
+// would trade a correct answer for a fast wrong one. When git is unavailable or
+// root is not a repository, nothing is dropped: the rule degrades to its old
+// behaviour rather than silently passing everything.
+func dropIgnoredPaths(paths []string, root string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+
+	cmd := exec.Command("git", "-C", root, "check-ignore", "--stdin")
+	cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		// Exit status 1 means "none of them are ignored", which is a normal
+		// answer and leaves out empty. Any other failure (git missing, not a
+		// repo) also lands here with no output, so the loop below is a no-op
+		// and every path is kept.
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return paths
+		}
+	}
+
+	ignored := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			ignored[line] = true
+		}
+	}
+	if len(ignored) == 0 {
+		return paths
+	}
+
+	kept := paths[:0]
+	for _, p := range paths {
+		if !ignored[p] && !ignored[strings.TrimSuffix(p, "/")] {
+			kept = append(kept, p)
+		}
+	}
+	return kept
 }
 
 // extractBacktickPaths finds backtick-quoted strings that look like file paths.

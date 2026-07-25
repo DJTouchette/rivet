@@ -2,7 +2,9 @@ package context
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -149,10 +151,14 @@ func TestLintStaleReference(t *testing.T) {
 		Path:         "test/billing.md",
 		Tags:         []string{"billing"},
 		RelatedPaths: []string{"lib/billing/**"},
+		// Deliberately neutral prose. A sentence that says the file is gone is
+		// documenting history and is exempt on purpose — see
+		// TestLintStaleReferenceAllowsDocumentedRemovals — so wording it that
+		// way here would test the exemption rather than the rule.
 		Body: `# Billing
 
 - ` + "`lib/billing/invoice.ex`" + ` — handles invoices
-- ` + "`lib/billing/deleted_file.ex`" + ` — this file was removed
+- ` + "`lib/billing/deleted_file.ex`" + ` — computes the discount ladder
 `,
 	}
 
@@ -166,6 +172,107 @@ func TestLintStaleReference(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected stale-reference warning for lib/billing/deleted_file.ex")
+	}
+}
+
+// A doc that records what a path used to be is doing its job. Flagging it asks
+// the author to delete the fact they went out of their way to write down.
+func TestLintStaleReferenceAllowsDocumentedRemovals(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "pipelines"), 0755)
+
+	doc := &Document{
+		Name: "deployment",
+		Kind: KindParadigm,
+		Path: "test/deployment.md",
+		Tags: []string{"deployment"},
+		Body: `# Deployment
+
+- The old branch-per-env model and ` + "`pipelines/templates/deploy-stage.yml`" + ` are retired.
+- ` + "`pipelines/legacy/build.yml`" + ` was replaced by the multi-stage pipeline.
+- Config moved: ` + "`config/old-settings.yml`" + ` is no longer read.
+`,
+	}
+
+	result := Lint([]*Document{doc}, root)
+
+	for _, w := range result.Warnings {
+		if w.Rule == "stale-reference" {
+			t.Errorf("unexpected stale-reference for a documented removal: %s", w.Message)
+		}
+	}
+}
+
+// A missing file is only evidence of a stale doc if the file was ever meant to
+// be there. Build outputs, runtime state and local config are legitimately
+// absent from a clean checkout and legitimately named in prose.
+func TestLintStaleReferenceSkipsGitignoredPaths(t *testing.T) {
+	root := t.TempDir()
+	if err := exec.Command("git", "-C", root, "init", "-q").Run(); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	os.MkdirAll(filepath.Join(root, "qa", "workbench"), 0755)
+	// Nested .gitignore files, as real projects have — the reason this uses
+	// git check-ignore rather than parsing the root .gitignore.
+	os.WriteFile(filepath.Join(root, ".gitignore"), []byte("environment/.env.*\n"), 0644)
+	os.WriteFile(filepath.Join(root, "qa", ".gitignore"), []byte("/index.html\n"), 0644)
+	os.WriteFile(filepath.Join(root, "qa", "workbench", ".gitignore"), []byte("proposals.json\n"), 0644)
+
+	doc := &Document{
+		Name: "qa",
+		Kind: KindParadigm,
+		Path: "test/qa.md",
+		Tags: []string{"qa"},
+		Body: `# QA
+
+- ` + "`qa/index.html`" + ` is the generated static site.
+- Proposal state lives in ` + "`qa/workbench/proposals.json`" + `.
+- Credentials come from ` + "`environment/.env.dev`" + `.
+- Engine source is ` + "`qa/workbench/engine.ts`" + `.
+`,
+	}
+
+	result := Lint([]*Document{doc}, root)
+
+	var flagged []string
+	for _, w := range result.Warnings {
+		if w.Rule == "stale-reference" {
+			flagged = append(flagged, w.Message)
+		}
+	}
+	// The three gitignored paths are exempt; the tracked-but-absent one is not,
+	// which is what proves the rule still works rather than being switched off.
+	if len(flagged) != 1 {
+		t.Fatalf("expected exactly 1 stale-reference (engine.ts), got %d: %v", len(flagged), flagged)
+	}
+	if !strings.Contains(flagged[0], "engine.ts") {
+		t.Errorf("wrong path flagged: %s", flagged[0])
+	}
+}
+
+// Outside a git repository the rule must keep working rather than silently
+// passing everything.
+func TestLintStaleReferenceWorksWithoutGit(t *testing.T) {
+	root := t.TempDir()
+
+	doc := &Document{
+		Name: "billing",
+		Kind: KindDomain,
+		Path: "test/billing.md",
+		Tags: []string{"billing"},
+		Body: "# Billing\n\n- `lib/billing/invoice.ex` computes invoices.\n",
+	}
+
+	result := Lint([]*Document{doc}, root)
+
+	found := false
+	for _, w := range result.Warnings {
+		if w.Rule == "stale-reference" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("stale reference should still be reported when root is not a git repo")
 	}
 }
 

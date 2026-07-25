@@ -72,24 +72,20 @@ func TestEnsureAgents_WritesRivetExplorer(t *testing.T) {
 	}
 }
 
-func TestEnsureAgents_DoesNotOverwriteExisting(t *testing.T) {
-	tmp := t.TempDir()
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	defer os.Chdir(cwd)
-
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
+// Generated agent briefs are refreshed, not skipped.
+//
+// Skip-if-exists froze them at whatever version first installed a project: the
+// brief that tells the investigator how to search could be improved upstream
+// and never reach anyone who already had one. A local edit is still not thrown
+// away — it is moved aside and named in the action.
+func TestEnsureAgents_RefreshesExistingAndKeepsTheOldCopy(t *testing.T) {
+	t.Chdir(t.TempDir())
 
 	path := filepath.Join(".claude", "agents", "rivet-explorer.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("custom"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("stale brief"), 0644); err != nil {
 		t.Fatalf("write existing: %v", err)
 	}
 
@@ -98,21 +94,53 @@ func TestEnsureAgents_DoesNotOverwriteExisting(t *testing.T) {
 		t.Fatalf("ensureAgents: %v", err)
 	}
 
-	if len(actions) != 2 {
-		t.Fatalf("expected 2 actions, got %#v", actions)
-	}
-	if !strings.Contains(actions[0], "already exists, skipped") {
-		t.Fatalf("unexpected actions: %#v", actions)
-	}
-	if !strings.Contains(actions[1], "added rivet-investigator agent") {
-		t.Fatalf("unexpected actions: %#v", actions)
-	}
-
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("reading existing file: %v", err)
+		t.Fatalf("reading refreshed file: %v", err)
 	}
-	if string(data) != "custom" {
-		t.Fatalf("existing agent was overwritten: %q", string(data))
+	if string(data) == "stale brief" {
+		t.Error("an outdated brief was left in place")
+	}
+	if !strings.Contains(string(data), "recon.grep") {
+		t.Errorf("refreshed brief does not look like the shipped one: %.60q", data)
+	}
+
+	backup, err := os.ReadFile(path + ".bak")
+	if err != nil {
+		t.Fatalf("previous version was not preserved: %v", err)
+	}
+	if string(backup) != "stale brief" {
+		t.Errorf("backup does not hold the previous contents: %q", backup)
+	}
+
+	var mentioned bool
+	for _, a := range actions {
+		if strings.Contains(a, "updated") && strings.Contains(a, ".bak") {
+			mentioned = true
+		}
+	}
+	if !mentioned {
+		t.Errorf("the action should say the previous version was saved: %#v", actions)
+	}
+}
+
+// An already-current file is left alone entirely — no churn, no stray backup.
+func TestEnsureAgents_LeavesCurrentFilesAlone(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	if _, err := ensureAgents(); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	actions, err := ensureAgents()
+	if err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	for _, a := range actions {
+		if !strings.Contains(a, "already current") {
+			t.Errorf("expected no-op on an unchanged file, got %q", a)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(".claude", "agents", "rivet-explorer.md.bak")); err == nil {
+		t.Error("an unchanged file should not produce a backup")
 	}
 }

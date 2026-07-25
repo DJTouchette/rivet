@@ -33,8 +33,10 @@ func ensureAgents() ([]string, error) {
 			return nil, fmt.Errorf("creating %s: %w", filepath.Dir(a.file), err)
 		}
 
-		if fileExists(a.file) {
-			actions = append(actions, fmt.Sprintf("%s already exists, skipped", a.file))
+		if action, done, err := refreshGenerated(a.file, a.content); err != nil {
+			return nil, err
+		} else if done {
+			actions = append(actions, action)
 			continue
 		}
 
@@ -165,3 +167,37 @@ Style:
 - Prefer file paths over vague module names.
 - Optimize for helping the parent agent decide where to read next or what is safe to change.
 `
+
+// refreshGenerated updates a rivet-owned generated file in place.
+//
+// These used to be skip-if-exists, which quietly froze them at whatever version
+// first installed them: every later improvement to an agent brief or skill
+// reached new projects only. That is the wrong default for files rivet
+// generates and owns — CLAUDE.md is regenerated wholesale for the same reason,
+// and an agent brief shapes behaviour just as much.
+//
+// A file that has been edited locally is not silently overwritten: its previous
+// contents are kept alongside it, and the action says so, so a customisation is
+// recoverable rather than lost.
+func refreshGenerated(path, want string) (action string, handled bool, err error) {
+	if !fileExists(path) {
+		return "", false, nil
+	}
+
+	current, readErr := os.ReadFile(path)
+	if readErr != nil {
+		return "", false, fmt.Errorf("reading %s: %w", path, readErr)
+	}
+	if string(current) == want {
+		return fmt.Sprintf("%s already current", path), true, nil
+	}
+
+	backup := path + ".bak"
+	if err := os.WriteFile(backup, current, 0644); err != nil {
+		return "", false, fmt.Errorf("backing up %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(want), 0644); err != nil {
+		return "", false, fmt.Errorf("writing %s: %w", path, err)
+	}
+	return fmt.Sprintf("%s updated (previous version saved to %s)", path, backup), true, nil
+}

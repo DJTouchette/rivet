@@ -44,11 +44,12 @@ func ensureSkills() ([]string, error) {
 		}
 
 		path := filepath.Join(s.dir, s.file)
-		if fileExists(path) {
-			actions = append(actions, fmt.Sprintf("%s already exists, skipped", path))
+		if action, done, err := refreshGenerated(path, s.content); err != nil {
+			return nil, err
+		} else if done {
+			actions = append(actions, action)
 			continue
 		}
-
 		if err := os.WriteFile(path, []byte(s.content), 0644); err != nil {
 			return nil, fmt.Errorf("writing %s: %w", path, err)
 		}

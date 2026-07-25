@@ -10,6 +10,7 @@ import (
 	"github.com/djtouchette/rivet/internal/capabilities"
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/context/semantic"
 )
 
 // Status represents the result of a single check.
@@ -60,6 +61,7 @@ func Run(groups capabilities.BuiltinGroups) *Result {
 	r.checkContextDirs()
 	r.checkContextFiles()
 	r.checkToolGroups(groups)
+	r.checkSemanticIndex()
 
 	return r
 }
@@ -230,5 +232,34 @@ func (r *Result) checkToolGroups(groups capabilities.BuiltinGroups) {
 	} else {
 		r.add("vaulty tools", StatusSkip,
 			"not registered — no vault found; run 'rivet vaulty init' to create one (or force with tools.vaulty: true)")
+	}
+}
+
+// checkSemanticIndex reports an embeddings index that is present but inert.
+//
+// Semantic scoring degrades to lexical silently when no backend is configured,
+// which is deliberate — a missing embedder should never break retrieval. But it
+// makes "semantic search is off" and "semantic search is broken" look identical,
+// and a project that has run `rivet context index` has already paid to build the
+// thing. Found in the wild: a 1.2 MB committed vectors.bin doing nothing,
+// because the environment that built it was not the environment querying it.
+func (r *Result) checkSemanticIndex() {
+	vectors := filepath.Join(semantic.DefaultStoreDir, "vectors.bin")
+	info, err := os.Stat(vectors)
+	indexPresent := err == nil && info.Size() > 0
+
+	backend := semantic.ConfigFromEnv().Backend
+
+	switch {
+	case indexPresent && backend == "":
+		r.add("semantic search", StatusWarn,
+			fmt.Sprintf("index built (%s) but RIVET_EMBED_BACKEND is unset — retrieval is lexical-only and the index is unused. Set the backend that built it, e.g. RIVET_EMBED_BACKEND=ollama", vectors))
+	case indexPresent:
+		r.add("semantic search", StatusOK, "index present and "+backend+" backend configured")
+	case backend != "":
+		r.add("semantic search", StatusWarn,
+			"backend "+backend+" configured but no index — run 'rivet context index' so queries do not embed the corpus on demand")
+	default:
+		r.add("semantic search", StatusSkip, "not configured — retrieval is lexical only (see 'rivet runbook find \"set up embeddings\"')")
 	}
 }

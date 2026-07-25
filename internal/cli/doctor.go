@@ -32,6 +32,19 @@ func newDoctorCmd() *cobra.Command {
 				fmt.Println("Some checks failed. Fix the issues above and re-run 'rivet doctor'.")
 				return fmt.Errorf("doctor found failures")
 			}
+			warns := 0
+			for _, c := range result.Checks {
+				if c.Status == doctor.StatusWarn {
+					warns++
+				}
+			}
+			if warns > 0 {
+				// Saying "all checks passed" over visible warnings is the same
+				// habit as reporting an empty list as "none": technically about
+				// failures, read as "nothing to see".
+				fmt.Printf("No failures, but %d warning(s) above are worth a look.\n", warns)
+				return nil
+			}
 			fmt.Println("All checks passed.")
 			return nil
 		},

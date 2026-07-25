@@ -175,3 +175,69 @@ func TestToolGroupsSaysNothingAboutUngatedTools(t *testing.T) {
 		}
 	}
 }
+
+// A built index with no backend configured is inert, and silently so: semantic
+// scoring degrades to lexical by design, which makes "off" and "broken"
+// indistinguishable. Found in the wild as a committed vectors.bin doing nothing.
+func TestSemanticIndexStates(t *testing.T) {
+	tests := []struct {
+		name       string
+		writeIndex bool
+		backend    string
+		wantStatus Status
+		wantHint   string
+	}{
+		{"index but no backend", true, "", StatusWarn, "RIVET_EMBED_BACKEND is unset"},
+		{"index and backend", true, "ollama", StatusOK, "ollama"},
+		{"backend but no index", false, "ollama", StatusWarn, "rivet context index"},
+		{"neither", false, "", StatusSkip, "lexical only"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv("RIVET_EMBED_BACKEND", tt.backend)
+
+			if tt.writeIndex {
+				if err := os.MkdirAll(".rivet/embeddings", 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(".rivet/embeddings/vectors.bin", []byte("not empty"), 0o644); err != nil {
+					t.Fatalf("write: %v", err)
+				}
+			}
+
+			r := &Result{}
+			r.checkSemanticIndex()
+			if len(r.Checks) != 1 {
+				t.Fatalf("expected one check, got %d", len(r.Checks))
+			}
+			got := r.Checks[0]
+			if got.Status != tt.wantStatus {
+				t.Errorf("status = %s, want %s (%s)", got.Status, tt.wantStatus, got.Message)
+			}
+			if !strings.Contains(got.Message, tt.wantHint) {
+				t.Errorf("message %q missing %q", got.Message, tt.wantHint)
+			}
+		})
+	}
+}
+
+// An empty vectors.bin is not an index. Treating it as one would report
+// "working" for a build that produced nothing.
+func TestSemanticIndexIgnoresEmptyVectorFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("RIVET_EMBED_BACKEND", "")
+	if err := os.MkdirAll(".rivet/embeddings", 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(".rivet/embeddings/vectors.bin", nil, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	r := &Result{}
+	r.checkSemanticIndex()
+	if r.Checks[0].Status != StatusSkip {
+		t.Errorf("an empty index file should not count as an index: %+v", r.Checks[0])
+	}
+}

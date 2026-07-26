@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/djtouchette/recon v0.12.0
+	github.com/djtouchette/recon v0.13.0
 	github.com/djtouchette/vaulty v0.4.0
 	github.com/djtouchette/witness v0.4.2
 	github.com/jackc/pgx/v5 v5.9.1
@@ -41,7 +41,7 @@ require (
 	github.com/tree-sitter/go-tree-sitter v0.25.0 // indirect
 	github.com/tree-sitter/tree-sitter-bash v0.25.1 // indirect
 	github.com/tree-sitter/tree-sitter-c v0.24.2 // indirect
-	github.com/tree-sitter/tree-sitter-c-sharp v0.23.5 // indirect
+	github.com/tree-sitter/tree-sitter-c-sharp v0.23.6-0.20260715211350-9150f7d56bb4 // indirect
 	github.com/tree-sitter/tree-sitter-cpp v0.23.4 // indirect
 	github.com/tree-sitter/tree-sitter-go v0.25.0 // indirect
 	github.com/tree-sitter/tree-sitter-java v0.23.5 // indirect

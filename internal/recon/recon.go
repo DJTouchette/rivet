@@ -11,14 +11,37 @@ import (
 	reconapp "github.com/djtouchette/recon/pkg/embedded"
 )
 
-// CacheDir returns the recon cache directory rivet uses, relative to the repo
-// root. Every rivet entry point that drives recon or witness — the MCP
-// adapters and the `rivet recon` / `rivet witness` CLI subtrees — must point at
-// this one directory. Recon's own default is <root>/.recon/, so any path that
-// forgets to override it silently builds and maintains a second index that the
-// other paths never read.
+// CacheDir returns the recon cache directory rivet uses: .rivet/recon under the
+// directory rivet was invoked in, as an ABSOLUTE path.
+//
+// Every rivet entry point that drives recon or witness — the MCP adapters and
+// the `rivet recon` / `rivet witness` CLI subtrees — must point at this one
+// directory. Recon's own default is <root>/.recon/, so any path that forgets to
+// override it silently builds and maintains a second index that the other paths
+// never read.
+//
+// It is absolute because the two embedded tools do NOT resolve a relative
+// --cache-dir the same way. recon resolves it against the process's working
+// directory; witness from v0.5.0 resolves it against the git repository root.
+// Handing both the same relative ".rivet/recon" from a subdirectory therefore
+// produces two caches — recon's under the subdirectory, witness's at the repo
+// root — and the "recon and witness share one cache" invariant quietly stops
+// holding. An absolute path is passed through untouched by both, in every
+// version, so the two agree wherever rivet is run from.
+//
+// The anchor is the working directory rather than the repository root because
+// that is where recon ANALYSES: rivet is meant to be run from the project root,
+// and pinning the cache to the repo root while recon indexed a subdirectory
+// would point one cache at two different analyses.
 func CacheDir() string {
-	return filepath.Join(".rivet", "recon")
+	dir := filepath.Join(".rivet", "recon")
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		// No working directory to resolve against. The relative path is what
+		// both tools did before, so it is the safe thing to fall back to.
+		return dir
+	}
+	return abs
 }
 
 // Run executes a recon command in-process and captures its output.

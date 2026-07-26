@@ -1,7 +1,7 @@
 ---
 tags: [mcp, nudging, tools, resources, jsonrpc, claude]
 owner: djtouchette
-last_reviewed: 2026-07-24
+last_reviewed: 2026-07-25
 related_paths:
   - "internal/mcp/**"
   - "internal/cli/serve.go"
@@ -39,6 +39,11 @@ through to the capability registry and executor.
 - Policy violations and executor errors both return `IsError: true` results
   rather than JSON-RPC errors — Claude sees them as tool output, not protocol
   failures. That's intentional; don't "fix" it into an RPC error.
+- **A non-zero `Result.ExitCode` also sets `IsError`.** Every in-process runner
+  reserves non-zero for "the command did not do what you asked" — witness in
+  particular exits 1 rather than print a test command it cannot get right.
+  Without the flag that arrives as an ordinary result whose body happens to end
+  in `(exit code: N)`, which reads like a tool that ran and found nothing to do.
 - Loader failures in `serve.go` (context, wiki, runbooks, code docs, semantic
   scorer) all degrade to a warning on stderr and a nil slice. The server starts
   with fewer tiers rather than refusing to start. Never write loader warnings to

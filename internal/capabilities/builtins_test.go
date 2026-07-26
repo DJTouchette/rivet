@@ -88,6 +88,91 @@ func TestBuiltinsForNamedTools(t *testing.T) {
 	}
 }
 
+func builtinByName(t *testing.T, name string) Capability {
+	t.Helper()
+	for _, c := range Builtins() {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("builtin %q not registered", name)
+	return Capability{}
+}
+
+// The witness.* descriptions are the entire contract an agent has for reading
+// witness's output: MCP hands it the Description and the ArgsHint and nothing
+// else. Witness fails closed — it emits one command per line, refuses to invent
+// an invocation for a language it has no runner for, and widens to the whole
+// suite when it cannot prove a selection — and every one of those behaviours
+// reads as a false green if the description does not name it. A consumer that
+// runs only the first line of a polyglot answer, or reads exit 1 as "no tests",
+// reports a pass for tests that never ran.
+//
+// Every clause below has to be true of the WITNESS RIVET EMBEDS, which is a
+// tagged module version and not the sibling working tree — see
+// internal/witness.PinnedVersion and the tests beside it, which check the flags
+// named here against the embedded build's own --help.
+func TestWitnessDescriptionsStateTheFailClosedContract(t *testing.T) {
+	tests := []struct {
+		capability string
+		// want are substrings that must appear in Description + ArgsHint,
+		// each standing for one part of the contract.
+		want []string
+	}{
+		{
+			capability: "witness.run",
+			want: []string{
+				"ONE COMMAND PER LINE", // a polyglot repo answers with several
+				"EVERY line",           // and all of them have to run
+				"CHECK EACH LINE",      // and an older build can emit one that mixes ecosystems
+				"Exit code 1",          // a language with no known runner
+				"Do not improvise",     // 'cargo test <path>' is a name filter, not a path
+				"WHOLE-SUITE",          // a build that can widen says so on stderr
+				"unproven",             // and zero lines is never proof on its own
+			},
+		},
+		{
+			capability: "witness.select",
+			want: []string{
+				// The summary fields are named as evidence, never as the
+				// condition that makes an empty selection safe: a build that
+				// does not emit them would make that condition always true.
+				"unmapped",
+				"not_indexed",
+				"analysis_error",
+				"NOT A GREEN LIGHT",
+				"unproven",
+			},
+		},
+		{capability: "witness.staged", want: []string{"summary.unmapped", "summary.not_indexed", "unproven"}},
+		{capability: "witness.since", want: []string{"summary.unmapped", "summary.not_indexed", "unproven"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.capability, func(t *testing.T) {
+			c := builtinByName(t, tt.capability)
+			text := c.Description + " " + c.ArgsHint
+			for _, want := range tt.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("description does not mention %q:\n%s", want, text)
+				}
+			}
+		})
+	}
+}
+
+// witness.run used to promise "a command STRING", singular. Witness now returns
+// one command per line, so the singular phrasing is not a stale nicety: it is an
+// instruction to run one of N commands and call the result a pass.
+func TestWitnessRunDoesNotPromiseASingleCommandString(t *testing.T) {
+	c := builtinByName(t, "witness.run")
+	for _, stale := range []string{"a command STRING", "the right command to run"} {
+		if strings.Contains(c.Description, stale) {
+			t.Errorf("description still promises a single command (%q): %s", stale, c.Description)
+		}
+	}
+}
+
 // Builtins stays the unfiltered source of truth — inspect and the filter itself
 // both read it, so gating must never mutate or shrink it.
 func TestBuiltinsUnfiltered(t *testing.T) {

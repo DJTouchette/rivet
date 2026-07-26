@@ -315,6 +315,55 @@ func TestToolsCallDangerousWithApproval(t *testing.T) {
 	}
 }
 
+// A capability that exits non-zero has failed, and the tool result must say so
+// in the field clients actually branch on.
+//
+// witness is the case that forced this: it exits 1 rather than print a test
+// command it cannot get right — a language it has no runner for, a selection it
+// cannot prove covers the change. Reported as an ordinary result, that lands as
+// an empty stdout with "(exit code: 1)" tacked on the end, which reads like a
+// tool that ran and found nothing to test. For a CI gate that is the false green
+// witness exists to prevent, arriving through rivet instead of through witness.
+func TestToolsCallFlagsANonZeroExitAsAnError(t *testing.T) {
+	reg := capabilities.NewRegistry()
+	if err := reg.Register(capabilities.Capability{
+		Name:        "witness.run",
+		Kind:        capabilities.KindTool,
+		Description: "Get the test-runner command(s) for the changed files",
+		Command:     []string{"witness", "select", "--format", "exec"},
+		Output:      "text",
+		Safety:      capabilities.SafetyLevelSafe,
+		Builtin:     true,
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	exec := capabilities.NewExecutor(reg)
+	// Stands in for witness refusing to emit a command for a language it has no
+	// runner for: nothing on stdout, the reason on stderr, exit 1.
+	exec.RegisterInProcess("witness", func([]string) (string, string, int, error) {
+		return "", "witness: no test runner known for language \"java\"\n", 1, nil
+	})
+
+	s := NewServer(reg, exec, nil, nil, nil, "test", true)
+	s.SetLearningsDir(t.TempDir())
+
+	resp := call(t, s, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"witness.run","arguments":{}}}`)
+	if resp.Error != nil {
+		t.Fatalf("unexpected JSON-RPC error: %+v", resp.Error)
+	}
+
+	var result ToolCallResult
+	unmarshalResult(t, resp, &result)
+
+	if !result.IsError {
+		t.Error("exit code 1 was reported as a successful tool call")
+	}
+	if len(result.Content) == 0 || !strings.Contains(result.Content[0].Text, "no test runner known") {
+		t.Errorf("the reason for the failure did not reach the caller: %v", result.Content)
+	}
+}
+
 func TestToolsCallNotFound(t *testing.T) {
 	s := newTestServer(t)
 	resp := call(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nonexistent","arguments":{}}}`)

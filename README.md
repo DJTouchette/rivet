@@ -362,7 +362,7 @@ Smart test selection based on what actually changed.
 
 - Maps changed files to relevant tests via the dependency graph
 - Scores by distance: direct test > 1-hop import > 2-hop > co-change pattern
-- Knows about Go, Elixir, Python, Ruby, Node, Rust test frameworks
+- Knows about Go, Elixir, Python, Ruby, Node, Rust, .NET test frameworks
 - Stops traversing at high-fan-out boundaries so it doesn't suggest your entire test suite
 
 **Tools exposed via MCP:**
@@ -370,9 +370,17 @@ Smart test selection based on what actually changed.
 | Tool | What it does |
 |------|-------------|
 | `witness.select` | Select tests for changed files (or auto-detect from git diff) |
-| `witness.run` | Same as select but returns the executable test command |
+| `witness.run` | Same as select, but returns the test commands to execute — **one per line** |
 | `witness.staged` | Select tests for staged changes (pre-commit) |
 | `witness.since` | Select tests since a git ref (PR review) |
+
+Witness fails closed, and the tools inherit that. Three consequences worth knowing before you wire one into a gate:
+
+- **`witness.run` returns one command per line, not one command.** A repo with an Elixir backend and a JS frontend answers with two; run every line and take the worst exit code. Running only the first reports a pass for tests that never ran. Check each line before running it — the runner at the front has to match the files behind it.
+- **A refusal is a non-zero exit, not an empty answer.** When witness has no test runner for a language it prints nothing and exits 1 with the reason on stderr, rather than emit an invocation that looks right and tests nothing. Don't paper over it with a guess.
+- **An empty selection is never a green light on its own.** Treat it as unproven and run the full suite. When the JSON tools carry `summary.unmapped`, `summary.not_indexed` or `summary.analysis_error`, those name what specifically went unaccounted for — but their *absence* proves nothing, because an older embedded witness does not emit them at all.
+
+> Witness is embedded as a **tagged module version** (`internal/witness.PinnedVersion`), not as a `replace` directive on the sibling checkout, so the capability descriptions describe what that build actually does. `internal/witness` has tests that check them against the embedded binary's own `--help`; read them before bumping the pin.
 
 ## Vaulty: Secrets Proxy
 

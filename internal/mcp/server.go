@@ -644,7 +644,17 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result:  ToolCallResult{Content: []ContentItem{{Type: "text", Text: text}}},
+		Result: ToolCallResult{
+			Content: []ContentItem{{Type: "text", Text: text}},
+			// A non-zero exit is a failed tool call and has to be flagged as one.
+			// Every in-process runner reserves non-zero for "the command did not
+			// do what you asked": witness exits 1 rather than print a test
+			// command it cannot get right, and left unflagged that arrives as an
+			// ordinary result whose body merely ends in "(exit code: 1)" —
+			// indistinguishable, to a client that reads isError, from a tool that
+			// ran and found nothing to do.
+			IsError: result.ExitCode != 0,
+		},
 	}
 }
 

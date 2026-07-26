@@ -277,40 +277,68 @@ func Builtins() []Capability {
 			ArgsHint:    "No arguments required. Optional: [\"--db\", \"<name>\"] to refresh only one",
 		},
 		// --- Witness: test selector ---
+		//
+		// Witness fails closed: it would rather run too many tests, or exit
+		// non-zero, than report a pass it did not earn. These descriptions are
+		// the only place the agent learns that, so they must state the unhappy
+		// paths — a caller that reads "no tests selected, exit 0" as "nothing to
+		// test" turns witness's loudest signal into a false green.
+		//
+		// They must also be true of the witness rivet actually embeds, which is
+		// a TAGGED module version (internal/witness.PinnedVersion), not the
+		// sibling working tree. Two rules follow, and both are enforced by tests
+		// in internal/witness:
+		//
+		//   - Name no flag the pinned build rejects. --fallback,
+		//     --require-coverage and --signals are v0.5.0 flags; against v0.4.2
+		//     each one exits 1 as unknown, so advertising them hands the agent a
+		//     broken invocation.
+		//   - Never phrase the fail-closed rule as a CONDITION on a summary
+		//     field. "safe when summary.unmapped is empty" evaluates to "safe"
+		//     on every run against a build that has no summary.unmapped — the
+		//     advice inverts into the false green it was written to prevent. An
+		//     empty selection is unproven by default; a summary field, when
+		//     present, only says what specifically went unaccounted for.
 		{
 			Name:        "witness.select",
 			Kind:        KindTool,
-			Description: "Select tests to run based on changed files. Uses dependency graph, co-change history, and hotspot scoring. No args = use git diff. Args: [\"path/to/changed.ex\"] or [\"path/a.ex\", \"path/b.ex\"]",
+			Description: "Select tests to run based on changed files. Uses dependency graph, co-change history, and hotspot scoring. Returns JSON: tests[] plus a summary. AN EMPTY tests[] IS NOT A GREEN LIGHT — it means witness selected nothing, which is only the same as \"nothing needs testing\" when you have checked why. Treat it as unproven: run the project's full test suite, or say plainly that coverage could not be established. If summary carries unmapped (changed files no selected test covers), not_indexed (files witness could not see) or analysis_error, those name exactly what went unaccounted for; summary.truncated means the list was capped by --max. No args = use git diff. Args: [\"path/to/changed.ex\"] or [\"path/a.ex\", \"path/b.ex\"]. Useful flags: [\"--kind\", \"unit\"], [\"--exclude\", \"glob\"], [\"--max\", \"100\"], [\"--min-score\", \"0.3\"]. Other flags vary by embedded witness version — pass [\"--help\"] to see the ones this build accepts rather than guessing",
 			Command:     []string{"witness", "select"},
 			Output:      "json",
 			Safety:      SafetyLevelSafe,
 			Builtin:     true,
-			ArgsHint:    "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]",
+			ArgsHint:    "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]. An empty tests[] is unproven, not safe: run the full suite or say coverage could not be established",
 		},
 		{
-			Name:        "witness.run",
-			Kind:        KindTool,
-			Description: "Get the test-runner command for the changed files — returns a command STRING (e.g. 'go test ./pkg/...' or 'mix test path1 path2') for you to execute yourself with your shell/Bash tool. This does NOT run the tests; it only tells you the right command to run. No args = use git diff. Args: [\"path/to/changed.ex\"]",
-			Command:     []string{"witness", "select", "--format", "exec"},
-			Output:      "text",
-			Safety:      SafetyLevelSafe,
-			Builtin:     true,
-			ArgsHint:    "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]",
+			Name: "witness.run",
+			Kind: KindTool,
+			Description: "Get the test-runner command(s) for the changed files, for you to execute yourself with your shell/Bash tool. This does NOT run the tests. " +
+				"Output is ONE COMMAND PER LINE, not a single command: a polyglot repo can return several (e.g. line 1 'mix test test/shop/cart_test.exs', line 2 'npx jest --runTestsByPath assets/js/__tests__/cart.test.js'). " +
+				"You MUST run EVERY line and report failure if ANY of them fails — running only the first line reports a pass for tests that never ran. " +
+				"CHECK EACH LINE BEFORE RUNNING IT: the runner at the front has to match the files behind it. A single line handing .js files to 'mix test' is a known bug in older embedded witness builds; do not run it, fall back to witness.select and name the tests yourself. " +
+				"Exit code 1 with an explanation on stderr and NO command means witness refuses to guess an invocation it cannot get right — typically a language it has no test runner for. Do not improvise a command in that case: use witness.select, pick the tests, and say out loud that the selection was not runnable. " +
+				"Zero lines with exit code 0 is unproven, NOT proof that nothing needed testing — witness may simply have selected nothing. Newer builds print the project's WHOLE-SUITE command instead when they cannot prove the selection is complete, and say so on stderr; that is deliberate, run it. Older builds just print less. Either way, an empty or suspiciously narrow answer is a reason to run the full suite, not to report a pass. " +
+				"No args = use git diff. Args: [\"path/to/changed.ex\"]",
+			Command:  []string{"witness", "select", "--format", "exec"},
+			Output:   "text",
+			Safety:   SafetyLevelSafe,
+			Builtin:  true,
+			ArgsHint: "Changed file paths, or no args to detect from git diff. Example: [\"lib/my_app/accounts.ex\"]. The reply is one command per line — run them all and take the worst exit code; exit code 1 means witness produced no runnable command, read stderr",
 		},
 		{
 			Name:        "witness.staged",
 			Kind:        KindTool,
-			Description: "Select tests for staged git changes (pre-commit). Uses git diff --staged to detect files, then scores tests by dependency graph, co-change, and hotspots. No args needed.",
+			Description: "Select tests for staged git changes (pre-commit). Uses git diff --staged to detect files, then scores tests by dependency graph, co-change, and hotspots. Returns the same JSON as witness.select, with the same caveat: an empty tests[] is unproven, not proof that the commit is safe — check summary.unmapped and summary.not_indexed when present, and run the full suite when the selection cannot be vouched for. No args needed. Useful flags: [\"--kind\", \"unit\"], [\"--max\", \"100\"]",
 			Command:     []string{"witness", "select", "--staged"},
 			Output:      "json",
 			Safety:      SafetyLevelSafe,
 			Builtin:     true,
-			ArgsHint:    "No arguments required — uses git diff --staged automatically",
+			ArgsHint:    "No arguments required — uses git diff --staged automatically. An empty tests[] is unproven, not safe; check summary.unmapped / summary.not_indexed when the build reports them",
 		},
 		{
 			Name:        "witness.since",
 			Kind:        KindTool,
-			Description: "Select tests for all changes since a git ref (branch point, tag, or commit). Useful for PR review — finds every test affected by the branch. Args: [\"main\"] or [\"v1.2.0\"] or [\"abc123\"]",
+			Description: "Select tests for all changes since a git ref (branch point, tag, or commit). Useful for PR review — finds every test affected by the branch. Returns the same JSON as witness.select, with the same caveat: an empty tests[] is unproven, not proof that the branch is safe — check summary.unmapped and summary.not_indexed when present, and run the full suite when the selection cannot be vouched for. Args: [\"main\"] or [\"v1.2.0\"] or [\"abc123\"]",
 			Command:     []string{"witness", "select"},
 			Output:      "json",
 			Safety:      SafetyLevelSafe,

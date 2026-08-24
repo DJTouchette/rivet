@@ -61,8 +61,8 @@ at all.
   returning any error yields `exitCode: 1`, so a sibling's meaningful exit codes
   never reach the caller. Don't build logic on top of a specific non-zero code
   from an embedded tool. (`witness run` carries the test runner's own code in an
-  error type `pkg/embedded` does not export; no capability invokes it, so the
-  flattening costs nothing today.)
+  error type witness's `<sibling>/pkg/embedded` does not export; no capability
+  invokes it, so the flattening costs nothing today.)
 - `SilenceErrors` means **nothing prints `cmd.Execute()`'s error** — it is not
   in the stderr buffer either, because cobra never wrote it there. The witness
   adapter appends it explicitly; `internal/recon` and `internal/vaulty` still

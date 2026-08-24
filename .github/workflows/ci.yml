@@ -1,10 +1,20 @@
 name: CI
 
 on:
+  # Long-lived branches, plus the prefixes real work is done under. Without
+  # these, a feature branch gets no CI until it opens a PR, so a broken build
+  # is only discovered at the end.
   push:
-    branches: [master, main]
+    branches:
+      - master
+      - main
+      - 'feat/**'
+      - 'fix/**'
+      - 'chore/**'
+      - 'wks/**'
+  # No branch filter: a PR targeting any branch is worth checking, and this is
+  # the backstop for work on a branch name the push list does not cover.
   pull_request:
-    branches: [master, main]
 
 jobs:
   test:

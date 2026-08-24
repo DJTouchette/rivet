@@ -1,0 +1,32 @@
+# Fixture config for the artifact golden test.
+#
+# tools: is pinned rather than left on auto-detect. Detection for the vaulty
+# group reads the developer's home directory, so leaving it unset would put a
+# different capability list in CLAUDE.md on a machine that happens to have a
+# vault than in CI, and the golden would flap.
+tools:
+  schema: false
+  vaulty: false
+
+capabilities:
+  - name: "db.order-summary"
+    kind: "project_command"
+    description: "Read-only order summary report"
+    command: ["./bin/fixturecli", "db", "order-summary"]
+    output: "json"
+    safety: "safe"
+
+  - name: "cache.warm"
+    kind: "project_command"
+    description: "Warm the pricing cache for a tenant"
+    command: ["./bin/fixturecli", "cache", "warm"]
+    output: "text"
+    safety: "guarded"
+
+  - name: "search.reindex"
+    kind: "workflow"
+    description: "Rebuild the search index from scratch"
+    command: ["./bin/fixturecli", "search", "reindex"]
+    output: "text"
+    safety: "dangerous"
+    requires_approval: true

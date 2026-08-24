@@ -11,14 +11,21 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/djtouchette/rivet/internal/provider"
 )
 
-// These goldens pin the exact bytes of every file rivet installs for Claude
-// Code. They exist so that a refactor has to prove it did not change what the
-// agent reads: the CLAUDE.md block, .mcp.json, the four skills and the two
-// subagents. An assertion on a handful of substrings would not catch a mangled
-// table, a wrong heading level, a doubled marker, or a file written to the
-// wrong path. Byte equality does.
+// These goldens pin the exact bytes of every file rivet installs for an agent
+// harness. They exist so that a refactor has to prove it did not change what
+// the agent reads: for Claude Code the CLAUDE.md block, .mcp.json, the four
+// skills and the two subagents; for Codex the AGENTS.md block, the four skills
+// and the config.toml table. An assertion on a handful of substrings would not
+// catch a mangled table, a wrong heading level, a doubled marker, or a file
+// written to the wrong path. Byte equality does.
+//
+// Both providers are generated from the same fixture, so a diff between the
+// two golden sets is a real difference in what rivet tells each harness, not
+// an artifact of different inputs.
 //
 // Regenerate after a deliberate change, then read the diff before committing:
 //
@@ -39,20 +46,25 @@ import (
 //   - The project root is a temp directory whose name changes every run.
 //     Nothing rivet generates should embed it, and assertNoMachinePaths fails
 //     loudly if that ever stops being true.
+//   - The codex provider registers its MCP server by shelling out to `codex
+//     mcp add`, which writes to CODEX_HOME. CODEX_HOME is redirected at a temp
+//     directory so a test run can never touch the developer's real
+//     ~/.codex/config.toml. The registration writes nothing into the project,
+//     so the goldens are the same whether or not codex is installed.
 //
 // Map iteration order is already handled upstream: Registry.List sorts by name,
 // context.Load sorts by kind then name, and encoding/json sorts map keys.
 
 var updateGoldens = flag.Bool("update", false, "rewrite the golden files under testdata/golden")
 
-// claudeArtifact is one generated file and the golden that pins its bytes.
-// path is relative to the project root, spelled the way rivet writes it.
-type claudeArtifact struct {
+// artifact is one generated file and the golden that pins its bytes. path is
+// relative to the project root, spelled the way rivet writes it.
+type artifact struct {
 	path   string
 	golden string
 }
 
-var claudeArtifacts = []claudeArtifact{
+var claudeArtifacts = []artifact{
 	{"CLAUDE.md", "CLAUDE.md.golden"},
 	{".mcp.json", "mcp.json.golden"},
 	{filepath.Join(".claude", "skills", "rivet-setup", "SKILL.md"), "skill-rivet-setup.md.golden"},
@@ -63,9 +75,17 @@ var claudeArtifacts = []claudeArtifact{
 	{filepath.Join(".claude", "agents", "rivet-investigator.md"), "agent-rivet-investigator.md.golden"},
 }
 
+var codexArtifacts = []artifact{
+	{"AGENTS.md", "AGENTS.md.golden"},
+	{filepath.Join(".codex", "skills", "rivet-setup", "SKILL.md"), "codex-skill-rivet-setup.md.golden"},
+	{filepath.Join(".codex", "skills", "rivet-fill-context", "SKILL.md"), "codex-skill-rivet-fill-context.md.golden"},
+	{filepath.Join(".codex", "skills", "rivet-compact-context", "SKILL.md"), "codex-skill-rivet-compact-context.md.golden"},
+	{filepath.Join(".codex", "skills", "rivet-promote-learnings", "SKILL.md"), "codex-skill-rivet-promote-learnings.md.golden"},
+}
+
 func TestClaudeArtifactGoldens(t *testing.T) {
 	goldenDir := absFromTestdata(t, "golden")
-	root := buildFixtureProject(t)
+	root := buildFixtureProject(t, provider.Claude())
 
 	for _, a := range claudeArtifacts {
 		got, err := os.ReadFile(a.path)
@@ -85,7 +105,7 @@ func TestClaudeArtifactGoldens(t *testing.T) {
 // and the outputs in one reviewable place.
 func TestClaudeArtifactSetGolden(t *testing.T) {
 	goldenDir := absFromTestdata(t, "golden")
-	root := buildFixtureProject(t)
+	root := buildFixtureProject(t, provider.Claude())
 
 	var b strings.Builder
 	for _, p := range projectFiles(t, root) {
@@ -97,10 +117,14 @@ func TestClaudeArtifactSetGolden(t *testing.T) {
 
 // buildFixtureProject copies testdata/fixture into a temp directory, makes it
 // the working directory, and runs the two code paths that produce everything
-// rivet installs for Claude: ensureProjectSetup (the shared body of `rivet
+// rivet installs for a provider: ensureProjectSetup (the shared body of `rivet
 // init` and `rivet update`) and the `rivet sync` command. It returns the
 // project root.
-func buildFixtureProject(t *testing.T) string {
+//
+// The provider is passed explicitly rather than detected. The fixture ships a
+// CLAUDE.md, so auto-detection would pick claude every time and the codex path
+// would never be exercised.
+func buildFixtureProject(t *testing.T, p provider.Provider) string {
 	t.Helper()
 
 	fixture := absFromTestdata(t, "fixture")
@@ -108,18 +132,20 @@ func buildFixtureProject(t *testing.T) string {
 	copyTree(t, fixture, root)
 
 	// An empty HOME, so no user-level rivet config or vaulty store can leak
-	// into the generated output.
+	// into the generated output, and a throwaway CODEX_HOME so `codex mcp add`
+	// cannot reach the developer's real config.
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Chdir(root)
 
-	if _, err := ensureProjectSetup(false); err != nil {
+	if _, err := ensureProjectSetup(false, []provider.Provider{p}); err != nil {
 		t.Fatalf("ensureProjectSetup: %v", err)
 	}
 
 	cmd := newSyncCmd()
 	// An empty slice, not nil: cobra falls back to os.Args when SetArgs gets
 	// nil, and the test binary's own flags are not this command's.
-	cmd.SetArgs([]string{})
+	cmd.SetArgs([]string{"--provider", p.Name()})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	if err := cmd.Execute(); err != nil {

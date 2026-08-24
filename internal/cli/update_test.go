@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/djtouchette/rivet/internal/provider"
 )
 
 func TestEnsureProjectSetup_DoesNotOverwriteConfigWithoutForce(t *testing.T) {
@@ -27,7 +29,7 @@ func TestEnsureProjectSetup_DoesNotOverwriteConfigWithoutForce(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	actions, err := ensureProjectSetup(false)
+	actions, err := ensureProjectSetup(false, []provider.Provider{provider.Claude()})
 	if err != nil {
 		t.Fatalf("ensureProjectSetup: %v", err)
 	}
@@ -82,7 +84,7 @@ func TestEnsureProjectSetup_OverwritesConfigWithForce(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	if _, err := ensureProjectSetup(true); err != nil {
+	if _, err := ensureProjectSetup(true, []provider.Provider{provider.Claude()}); err != nil {
 		t.Fatalf("ensureProjectSetup(force): %v", err)
 	}
 

@@ -1,17 +1,19 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/djtouchette/rivet/internal/config"
+	"github.com/djtouchette/rivet/internal/provider"
 	"github.com/spf13/cobra"
 )
 
 func newInitCmd() *cobra.Command {
 	var force bool
+	var providerSpec string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -26,7 +28,12 @@ func newInitCmd() *cobra.Command {
 				}
 			}
 
-			actions, err := ensureProjectSetup(force)
+			providers, err := provider.Resolve(providerSpec, ".")
+			if err != nil {
+				return err
+			}
+
+			actions, err := ensureProjectSetup(force, providers)
 			if err != nil {
 				return err
 			}
@@ -37,71 +44,55 @@ func newInitCmd() *cobra.Command {
 				fmt.Printf("  + %s\n", a)
 			}
 			fmt.Println()
-			fmt.Println("Next steps:")
-			fmt.Println("  /rivet-setup             Run in Claude Code to scaffold + fill context docs automatically")
-			fmt.Println("  /agents                  Confirm rivet-explorer and rivet-investigator are available")
-			fmt.Println()
-			fmt.Println("Or manually:")
-			fmt.Println("  rivet context scaffold   Generate starter context docs from your codebase")
-			fmt.Println("  /rivet-fill-context      Run in Claude Code to fill out context docs using recon")
-			fmt.Println("  rivet update             Add any missing Rivet files without overwriting config.yaml")
-			fmt.Println("  rivet sync               Update CLAUDE.md with rivet capabilities")
+			printInitNextSteps(providers)
 
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite existing config.yaml")
+	cmd.Flags().StringVar(&providerSpec, "provider", "auto", providerFlagUsage)
 	return cmd
 }
 
-// ensureMCPConfig adds the rivet server to .mcp.json, creating the file if needed.
-// Non-destructive: preserves existing servers and only adds/updates the "rivet" entry.
-func ensureMCPConfig(path string) (string, error) {
-	type mcpServer struct {
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	}
-	type mcpConfig struct {
-		Servers map[string]mcpServer `json:"mcpServers"`
-	}
+// providerFlagUsage is shared by init, update and sync so the three commands
+// describe the flag the same way.
+var providerFlagUsage = "agent harness to write artifacts for: " +
+	strings.Join(provider.Names(), ", ") + ", both, or auto (detect, defaulting to claude)"
 
-	cfg := mcpConfig{Servers: make(map[string]mcpServer)}
+func printInitNextSteps(providers []provider.Provider) {
+	claude := hasProvider(providers, provider.Claude().Name())
 
-	// Load existing config if present.
-	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			return "", fmt.Errorf("parsing %s: %w", path, err)
+	fmt.Println("Next steps:")
+	if claude {
+		fmt.Println("  /rivet-setup             Run in Claude Code to scaffold + fill context docs automatically")
+		fmt.Println("  /agents                  Confirm rivet-explorer and rivet-investigator are available")
+		fmt.Println()
+		fmt.Println("Or manually:")
+	}
+	fmt.Println("  rivet context scaffold   Generate starter context docs from your codebase")
+	if claude {
+		fmt.Println("  /rivet-fill-context      Run in Claude Code to fill out context docs using recon")
+	}
+	fmt.Println("  rivet update             Add any missing Rivet files without overwriting config.yaml")
+	fmt.Printf("  rivet sync               Update %s with rivet capabilities\n", instructionFileList(providers))
+}
+
+func hasProvider(providers []provider.Provider, name string) bool {
+	for _, p := range providers {
+		if p.Name() == name {
+			return true
 		}
-		if cfg.Servers == nil {
-			cfg.Servers = make(map[string]mcpServer)
-		}
 	}
+	return false
+}
 
-	// Check if rivet is already configured.
-	if existing, ok := cfg.Servers["rivet"]; ok {
-		if existing.Command == "rivet" {
-			return fmt.Sprintf("%s already has rivet MCP server", path), nil
-		}
+func instructionFileList(providers []provider.Provider) string {
+	var files []string
+	for _, p := range providers {
+		files = append(files, p.InstructionFile())
 	}
-
-	// Add rivet server.
-	cfg.Servers["rivet"] = mcpServer{
-		Command: "rivet",
-		Args:    []string{"serve"},
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshaling MCP config: %w", err)
-	}
-	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return "", fmt.Errorf("writing %s: %w", path, err)
-	}
-
-	return fmt.Sprintf("added rivet MCP server to %s", path), nil
+	return strings.Join(files, " and ")
 }
 
 func fileExists(path string) bool {
@@ -109,7 +100,7 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func ensureProjectSetup(force bool) ([]string, error) {
+func ensureProjectSetup(force bool, providers []provider.Provider) ([]string, error) {
 	rivetDir := ".rivet"
 	var actions []string
 
@@ -142,23 +133,25 @@ func ensureProjectSetup(force bool) ([]string, error) {
 		actions = append(actions, ".rivet/config.yaml already exists, skipped")
 	}
 
-	mcpAction, err := ensureMCPConfig(".mcp.json")
-	if err != nil {
-		return nil, fmt.Errorf("configuring MCP: %w", err)
-	}
-	actions = append(actions, mcpAction)
+	for _, p := range providers {
+		mcpAction, err := p.WriteMCPConfig(".")
+		if err != nil {
+			return nil, fmt.Errorf("configuring MCP for %s: %w", p.Name(), err)
+		}
+		actions = append(actions, mcpAction)
 
-	skillActions, err := ensureSkills()
-	if err != nil {
-		return nil, fmt.Errorf("installing skills: %w", err)
-	}
-	actions = append(actions, skillActions...)
+		skillActions, err := ensureSkills(p)
+		if err != nil {
+			return nil, fmt.Errorf("installing %s skills: %w", p.Name(), err)
+		}
+		actions = append(actions, skillActions...)
 
-	agentActions, err := ensureAgents()
-	if err != nil {
-		return nil, fmt.Errorf("installing agents: %w", err)
+		agentActions, err := ensureAgents(p)
+		if err != nil {
+			return nil, fmt.Errorf("installing %s agents: %w", p.Name(), err)
+		}
+		actions = append(actions, agentActions...)
 	}
-	actions = append(actions, agentActions...)
 
 	// Nudging lives in the MCP server now; clear out the bash hooks that
 	// older versions installed so they don't double-nudge.

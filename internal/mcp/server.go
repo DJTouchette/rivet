@@ -168,7 +168,7 @@ const promoteLearningsThreshold = 10
 const promoteMessage = `
 
 ---
-[rivet] The learning log has %d active entries (threshold: %d). Review them and promote the high-value ones into context docs. Run /rivet-promote-learnings, or inspect the entries in %s.`
+[rivet] The learning log has %d active entries (threshold: %d). Review them and promote the high-value ones into context docs. Run /rivet-promote-learnings if your harness has it, or 'rivet learnings promote <name> --to <doc>' from the CLI, or inspect the entries in %s.`
 
 // reconInvestigationTools are the recon tools that indicate active investigation
 // (not just a refresh or overview).

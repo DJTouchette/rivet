@@ -1,0 +1,13 @@
+.codex/skills/rivet-compact-context/SKILL.md
+.codex/skills/rivet-fill-context/SKILL.md
+.codex/skills/rivet-promote-learnings/SKILL.md
+.codex/skills/rivet-setup/SKILL.md
+.rivet/config.yaml
+.rivet/context/domains/billing.md
+.rivet/context/domains/orders.md
+.rivet/context/modules/pricing-engine.md
+.rivet/context/paradigms/ports-and-adapters.md
+.rivet/runbooks/reindex-embeddings.md
+.rivet/runbooks/setup-semantic-search.md
+AGENTS.md
+CLAUDE.md

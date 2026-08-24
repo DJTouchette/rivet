@@ -1,0 +1,3 @@
+[mcp_servers.rivet]
+command = "rivet"
+args = ["serve"]

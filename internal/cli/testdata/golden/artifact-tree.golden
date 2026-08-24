@@ -1,0 +1,15 @@
+.claude/agents/rivet-explorer.md
+.claude/agents/rivet-investigator.md
+.claude/skills/rivet-compact-context/SKILL.md
+.claude/skills/rivet-fill-context/SKILL.md
+.claude/skills/rivet-promote-learnings/SKILL.md
+.claude/skills/rivet-setup/SKILL.md
+.mcp.json
+.rivet/config.yaml
+.rivet/context/domains/billing.md
+.rivet/context/domains/orders.md
+.rivet/context/modules/pricing-engine.md
+.rivet/context/paradigms/ports-and-adapters.md
+.rivet/runbooks/reindex-embeddings.md
+.rivet/runbooks/setup-semantic-search.md
+CLAUDE.md

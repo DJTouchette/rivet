@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/djtouchette/rivet/internal/provider"
 )
 
 func TestEnsureAgents_WritesRivetExplorer(t *testing.T) {
@@ -20,7 +22,7 @@ func TestEnsureAgents_WritesRivetExplorer(t *testing.T) {
 		t.Fatalf("chdir: %v", err)
 	}
 
-	actions, err := ensureAgents()
+	actions, err := ensureAgents(provider.Claude())
 	if err != nil {
 		t.Fatalf("ensureAgents: %v", err)
 	}
@@ -89,7 +91,7 @@ func TestEnsureAgents_RefreshesExistingAndKeepsTheOldCopy(t *testing.T) {
 		t.Fatalf("write existing: %v", err)
 	}
 
-	actions, err := ensureAgents()
+	actions, err := ensureAgents(provider.Claude())
 	if err != nil {
 		t.Fatalf("ensureAgents: %v", err)
 	}
@@ -128,10 +130,10 @@ func TestEnsureAgents_RefreshesExistingAndKeepsTheOldCopy(t *testing.T) {
 func TestEnsureAgents_LeavesCurrentFilesAlone(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	if _, err := ensureAgents(); err != nil {
+	if _, err := ensureAgents(provider.Claude()); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	actions, err := ensureAgents()
+	actions, err := ensureAgents(provider.Claude())
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}

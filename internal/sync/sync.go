@@ -7,6 +7,7 @@ import (
 
 	"github.com/djtouchette/rivet/internal/capabilities"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
+	"github.com/djtouchette/rivet/internal/provider"
 )
 
 const (
@@ -14,8 +15,11 @@ const (
 	markerEnd   = "<!-- rivet:end -->"
 )
 
-// GenerateClaudeMD produces the rivet-managed CLAUDE.md section content.
-func GenerateClaudeMD(caps []capabilities.Capability, docs []*rivetctx.Document) string {
+// GenerateInstructions produces the rivet-managed section for a provider's
+// instruction file. Almost all of it is provider-neutral: MCP tool names, the
+// context-first workflow, and how to read recon's caveats read the same to any
+// agent. The one exception is the subagent paragraph, which is gated below.
+func GenerateInstructions(p provider.Provider, caps []capabilities.Capability, docs []*rivetctx.Document) string {
 	var b strings.Builder
 
 	b.WriteString(markerStart)
@@ -32,7 +36,11 @@ func GenerateClaudeMD(caps []capabilities.Capability, docs []*rivetctx.Document)
 	// MCP usage rules.
 	b.WriteString("## Rivet Rules\n\n")
 	b.WriteString("Rivet is available as an MCP server. **Always check context docs before reaching for recon tools.**\n\n")
-	b.WriteString("If Claude Code project agents are available, use `rivet-explorer` for strictly read-only repo exploration and `rivet-investigator` when investigation may produce reusable findings worth saving with `rivet.learn`.\n\n")
+	// Only providers rivet installs subagents for get told the subagents
+	// exist. An empty AgentsDir means there is nothing to point at.
+	if p.AgentsDir() != "" {
+		b.WriteString("If Claude Code project agents are available, use `rivet-explorer` for strictly read-only repo exploration and `rivet-investigator` when investigation may produce reusable findings worth saving with `rivet.learn`.\n\n")
+	}
 
 	// Tiered workflow.
 	b.WriteString("### Understand tasks (explain, audit, review, investigate)\n\n")
@@ -195,10 +203,11 @@ func filterByKind(docs []*rivetctx.Document, kind rivetctx.Kind) []*rivetctx.Doc
 	return out
 }
 
-// WriteClaudeMD writes the rivet section into the CLAUDE.md file at the given path.
-// If the file exists, only the content between rivet markers is replaced.
-// If the file doesn't exist, it is created with the rivet section at the top.
-func WriteClaudeMD(path string, section string) error {
+// WriteInstructions writes the rivet section into the instruction file at the
+// given path. If the file exists, only the content between rivet markers is
+// replaced. If the file doesn't exist, it is created with the rivet section at
+// the top.
+func WriteInstructions(path string, section string) error {
 	existing, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -229,4 +238,19 @@ func replaceSection(content, section string) string {
 
 	// No markers found — prepend the rivet section.
 	return section + "\n\n" + content
+}
+
+// GenerateClaudeMD is a deprecated alias for GenerateInstructions with the
+// Claude provider.
+//
+// Deprecated: use GenerateInstructions.
+func GenerateClaudeMD(caps []capabilities.Capability, docs []*rivetctx.Document) string {
+	return GenerateInstructions(provider.Claude(), caps, docs)
+}
+
+// WriteClaudeMD is a deprecated alias for WriteInstructions.
+//
+// Deprecated: use WriteInstructions.
+func WriteClaudeMD(path string, section string) error {
+	return WriteInstructions(path, section)
 }

@@ -4,12 +4,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/djtouchette/rivet/internal/provider"
 )
 
-// ensureAgents writes Claude Code subagents to .claude/agents/.
-// Non-destructive: existing agent files are never overwritten.
-func ensureAgents() ([]string, error) {
+// ensureAgents writes rivet's subagents into the provider's agents directory.
+// Non-destructive: existing agent files are never overwritten. A provider with
+// no agents directory gets no subagents and no error: the brief format is not
+// shared between harnesses, and the generated instruction file already leaves
+// the subagents out for those providers.
+func ensureAgents(p provider.Provider) ([]string, error) {
 	var actions []string
+
+	agentsDir := p.AgentsDir()
+	if agentsDir == "" {
+		return nil, nil
+	}
 
 	agents := []struct {
 		name    string
@@ -18,12 +28,12 @@ func ensureAgents() ([]string, error) {
 	}{
 		{
 			name:    "rivet-explorer",
-			file:    filepath.Join(".claude", "agents", "rivet-explorer.md"),
+			file:    filepath.Join(agentsDir, "rivet-explorer.md"),
 			content: rivetExplorerAgent,
 		},
 		{
 			name:    "rivet-investigator",
-			file:    filepath.Join(".claude", "agents", "rivet-investigator.md"),
+			file:    filepath.Join(agentsDir, "rivet-investigator.md"),
 			content: rivetInvestigatorAgent,
 		},
 	}

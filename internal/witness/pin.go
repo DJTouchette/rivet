@@ -18,4 +18,4 @@ package witness
 // descriptions are written to be true of ANY witness rivet might embed, and
 // TestPinnedVersionMatchesGoMod plus TestDescriptionsOnlyNameFlagsWitnessAccepts
 // hold them to it.
-const PinnedVersion = "v0.4.2"
+const PinnedVersion = "v0.5.0"

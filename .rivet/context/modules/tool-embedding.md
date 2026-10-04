@@ -58,8 +58,8 @@ at all.
 ## Failure modes
 
 - The Witness adapter preserves test-runner exit codes via the exported
-  `embedded.TestsFailed` error (available in the v0.5.0 pin); its regression
-  test verifies exit 17. Other Witness errors return 1 with an explanation.
+  `embedded.TestsFailed` error (available since v0.5.0; current pin v0.6.0).
+  Its regression test verifies exit 17. Other Witness errors return 1 with an explanation.
   Older installed Rivet builds may still flatten these codes; changing source
   does not update a running binary. Recon and Vaulty adapters still flatten
   their errors to 1.
@@ -78,6 +78,17 @@ at all.
   failing at build time. `internal/rally/pins.go` also deliberately mirrors
   rally's file/dir permissions (0644/0755) so pinning from rivet doesn't change
   them out from under rally.
+
+## Current Witness pin
+
+Rivet embeds Witness v0.6.0. Structured `select --format plan` output carries
+argv/cwd, status, coverage and diagnostics; it is available through CLI and MCP.
+Local Cargo patches widen to every discovered Cargo suite, including workspace
+and package commands, so execution can repeat packages. Unsupported overrides,
+excluded targets, compound JS wrappers and external MSBuild imports remain
+incomplete/unknown and refuse runnable output. Planning does not launch a runner
+or package manager. Explicit suite mappings cover conventions outside static
+discovery; ambient Cargo configuration and external graphs remain outside it.
 
 ## Gotchas
 

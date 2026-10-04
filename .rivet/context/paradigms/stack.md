@@ -1,7 +1,7 @@
 ---
 tags: [go, stack, dependencies, modules, cgo, tree-sitter, build, tests, toolchain]
 owner: djtouchette
-last_reviewed: 2026-07-24
+last_reviewed: 2026-10-03
 related_paths:
   - "go.mod"
   - "Makefile"
@@ -62,7 +62,7 @@ the entire static bar.
 ## Common patterns
 
 - **Sibling tools are consumed as tagged module versions with no `replace`
-  directives.** `go.mod` pins recon v0.10.0, witness v0.4.2, vaulty v0.4.0.
+  directives.** `go.mod` pins recon v0.13.1, witness v0.6.0, vaulty v0.4.0.
   Editing a sibling repo changes nothing here until it is tagged and bumped —
   the most common wasted hour in this codebase. Details in [[tool-embedding]].
 - **CGo is mandatory.** All eighteen tree-sitter modules in `go.mod` are marked

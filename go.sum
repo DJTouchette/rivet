@@ -31,6 +31,8 @@ github.com/djtouchette/vaulty v0.4.0 h1:BIEVMEHS/OFvLZcY4a5HxCGDBMsO6pfBYNuHZLsB
 github.com/djtouchette/vaulty v0.4.0/go.mod h1:xStYbWtFYLTajuIwxrJwsL9szkPgCI8PaT3mdhbfpK8=
 github.com/djtouchette/witness v0.5.0 h1:6XIIeXS4tGDtHaOzhVoueBUAiGcpy3Cy5Zo1lOZXweI=
 github.com/djtouchette/witness v0.5.0/go.mod h1:EzkNOKS8Wo+E6/NqzdWAEH2JwdYn3ynOlWpjmZmE+0A=
+github.com/djtouchette/witness v0.6.0 h1:3uQB/81VrD7JAIY48bUzwec6+FObzhrKK8KKXeBqZs8=
+github.com/djtouchette/witness v0.6.0/go.mod h1:zi1kghoIkm+twSqR4YxAqwNzNjqOiFq/4Oo7aiiHYGo=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/godbus/dbus/v5 v5.2.2 h1:TUR3TgtSVDmjiXOgAAyaZbYmIeP3DPkld3jgKGV8mXQ=

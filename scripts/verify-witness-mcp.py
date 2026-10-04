@@ -9,7 +9,7 @@ import tempfile
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--binary", required=True)
-parser.add_argument("--require-plan", action="store_true", help="require the unreleased Witness plan contract")
+parser.add_argument("--require-plan", action="store_true", help="require the Witness v0.6.0 plan contract")
 args = parser.parse_args()
 binary = str(Path(args.binary).resolve())
 with tempfile.TemporaryDirectory(prefix="rivet-witness-mcp-") as directory:

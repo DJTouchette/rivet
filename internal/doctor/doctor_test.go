@@ -1,10 +1,15 @@
 package doctor
 
 import (
+	"encoding/json"
 	"github.com/djtouchette/rivet/internal/capabilities"
+	"github.com/djtouchette/rivet/internal/context/semantic"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -14,6 +19,7 @@ func TestRun_NoRivetDir(t *testing.T) {
 	os.Chdir(tmp)
 	defer os.Chdir(origDir)
 
+	t.Setenv(semantic.EnvBackend, "")
 	result := Run(capabilities.BuiltinGroups{})
 
 	if !result.HasFailures() {
@@ -49,6 +55,7 @@ func TestRun_ValidSetup(t *testing.T) {
 	os.WriteFile(filepath.Join(".rivet", "context", "domains", "billing.md"),
 		[]byte("# Billing\n\nHandles invoices."), 0644)
 
+	t.Setenv(semantic.EnvBackend, "")
 	result := Run(capabilities.BuiltinGroups{})
 
 	if result.HasFailures() {
@@ -69,6 +76,7 @@ func TestRun_BadConfig(t *testing.T) {
 	os.MkdirAll(".rivet", 0755)
 	os.WriteFile(filepath.Join(".rivet", "config.yaml"), []byte("{{bad yaml"), 0644)
 
+	t.Setenv(semantic.EnvBackend, "")
 	result := Run(capabilities.BuiltinGroups{})
 
 	if !result.HasFailures() {
@@ -94,6 +102,7 @@ func TestRun_InvalidCapability(t *testing.T) {
 `)
 	os.WriteFile(filepath.Join(".rivet", "config.yaml"), configYAML, 0644)
 
+	t.Setenv(semantic.EnvBackend, "")
 	result := Run(capabilities.BuiltinGroups{})
 
 	// Should have a warning on capabilities, not a hard fail.
@@ -265,33 +274,89 @@ func TestToolGroupsSaysNothingAboutUngatedTools(t *testing.T) {
 // scoring degrades to lexical by design, which makes "off" and "broken"
 // indistinguishable. Found in the wild as a committed vectors.bin doing nothing.
 func TestSemanticIndexStates(t *testing.T) {
+	// These subtests change cwd and environment: keep them sequential. t.Chdir
+	// and t.Setenv restore all process state, including a developer's settings.
 	tests := []struct {
-		name       string
-		writeIndex bool
-		backend    string
-		wantStatus Status
-		wantHint   string
+		name, backend, index, response string
+		wantStatus                     Status
+		wantHints                      []string
 	}{
-		{"index but no backend", true, "", StatusWarn, "RIVET_EMBED_BACKEND is unset"},
-		{"index and backend", true, "ollama", StatusOK, "ollama"},
-		{"backend but no index", false, "ollama", StatusWarn, "rivet context index"},
-		{"neither", false, "", StatusSkip, "lexical only"},
+		{"index but no backend", "", "match", "ok", StatusWarn, []string{"RIVET_EMBED_BACKEND is unset", "lexical-only"}},
+		{"index and backend", "ollama", "match", "ok", StatusOK, []string{"ollama reachable", "1 cached vectors match"}},
+		{"backend but no index", "ollama", "", "ok", StatusWarn, []string{"reachable but there is no index", "rivet context index"}},
+		{"neither", "", "", "ok", StatusSkip, []string{"lexical only"}},
+		{"different model", "ollama", "model", "ok", StatusWarn, []string{"cached vectors are unusable", "RIVET_EMBED_MODEL/RIVET_EMBED_BASE_URL"}},
+		{"different host", "ollama", "host", "ok", StatusWarn, []string{"cached vectors are unusable", "RIVET_EMBED_MODEL/RIVET_EMBED_BASE_URL"}},
+		{"different dimension", "ollama", "dimension", "ok", StatusWarn, []string{"cached vectors are unusable", "Re-run 'rivet context index'"}},
+		{"corrupt index", "ollama", "corrupt", "ok", StatusWarn, []string{"works but the index could not be read"}},
+		{"unavailable with index", "ollama", "match", "unavailable", StatusFail, []string{"not answering", "falling back to lexical", "ollama pull fixture-model"}},
+		{"unavailable without index", "ollama", "", "unavailable", StatusFail, []string{"not answering", "falling back to lexical"}},
+		{"model not pulled", "ollama", "match", "missing model", StatusFail, []string{"not answering", "ollama pull fixture-model"}},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Chdir(t.TempDir())
-			t.Setenv("RIVET_EMBED_BACKEND", tt.backend)
-
-			if tt.writeIndex {
-				if err := os.MkdirAll(".rivet/embeddings", 0o755); err != nil {
-					t.Fatalf("mkdir: %v", err)
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				var req struct{ Model, Prompt string }
+				if r.Method != http.MethodPost || r.URL.Path != "/api/embeddings" || json.NewDecoder(r.Body).Decode(&req) != nil || req.Model != "fixture-model" || req.Prompt != "rivet doctor probe" {
+					t.Errorf("invalid Ollama probe: %s %s %+v", r.Method, r.URL.Path, req)
+					http.Error(w, "invalid probe", http.StatusBadRequest)
+					return
 				}
-				if err := os.WriteFile(".rivet/embeddings/vectors.bin", []byte("not empty"), 0o644); err != nil {
-					t.Fatalf("write: %v", err)
+				if r.Header.Get("Authorization") != "" {
+					t.Error("fixture received unexpected authorization")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if tt.response == "missing model" {
+					w.WriteHeader(http.StatusNotFound)
+					_, _ = w.Write([]byte(`{"error":"model fixture-model not found"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"embedding":[1,0,0]}`))
+			}))
+			t.Cleanup(srv.Close)
+			if tt.response == "unavailable" {
+				srv.Close()
+			}
+			t.Setenv(semantic.EnvBackend, tt.backend)
+			t.Setenv(semantic.EnvBaseURL, srv.URL)
+			t.Setenv(semantic.EnvModel, "fixture-model")
+			t.Setenv(semantic.EnvAPIKey, "")
+
+			if tt.index != "" {
+				cfg := semantic.Config{Backend: "ollama", BaseURL: srv.URL, Model: "fixture-model"}
+				if tt.index == "model" {
+					cfg.Model = "old-model"
+				}
+				if tt.index == "host" {
+					cfg.BaseURL = "http://old-host.invalid"
+				}
+				emb, err := semantic.New(cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				vec := semantic.Vector{1, 0, 0}
+				if tt.index == "dimension" {
+					vec = semantic.Vector{1, 0}
+				}
+				store, err := semantic.OpenStore(semantic.DefaultStoreDir, emb.ID(), len(vec))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Put(semantic.HashText(emb.ID(), "fixture document"), vec); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Save(); err != nil {
+					t.Fatal(err)
+				}
+				if tt.index == "corrupt" {
+					if err := os.WriteFile(filepath.Join(semantic.DefaultStoreDir, "manifest.json"), []byte("invalid"), 0644); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
-
 			r := &Result{}
 			r.checkSemanticIndex()
 			if len(r.Checks) != 1 {
@@ -301,8 +366,17 @@ func TestSemanticIndexStates(t *testing.T) {
 			if got.Status != tt.wantStatus {
 				t.Errorf("status = %s, want %s (%s)", got.Status, tt.wantStatus, got.Message)
 			}
-			if !strings.Contains(got.Message, tt.wantHint) {
-				t.Errorf("message %q missing %q", got.Message, tt.wantHint)
+			for _, hint := range tt.wantHints {
+				if !strings.Contains(got.Message, hint) {
+					t.Errorf("message %q missing %q", got.Message, hint)
+				}
+			}
+			wantCalls := int32(1)
+			if tt.backend == "" || tt.response == "unavailable" {
+				wantCalls = 0
+			}
+			if calls.Load() != wantCalls {
+				t.Errorf("probe requests = %d, want %d", calls.Load(), wantCalls)
 			}
 		})
 	}

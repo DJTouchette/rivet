@@ -1,5 +1,8 @@
 # Witness consistency review — 2026-10-03
 
+Historical review. Current Cargo/doctor repairs and unskipped green gates are in
+[witness-cargo-ci-handoff-2026-10-03.md](witness-cargo-ci-handoff-2026-10-03.md).
+
 ## Baselines and ownership
 
 Both changed repositories were fetched and pulled fast-forward-only **before
@@ -98,7 +101,7 @@ PROOF_DIR=$(mktemp -d)
 (cd "$PROOF_DIR" && go work init "$RIVET_TREE" "$WITNESS_TREE")
 GOWORK="$PROOF_DIR/go.work" go build -o "$PROOF_DIR/rivet" ./cmd/rivet
 python3 scripts/verify-witness-mcp.py --binary "$PROOF_DIR/rivet" --require-plan
-RIVET_EMBED_BACKEND= GOWORK="$PROOF_DIR/go.work" go test ./... -skip '^TestSemanticIndexStates$'
+GOWORK="$PROOF_DIR/go.work" go test ./... -count=1
 ```
 
 No `replace` directive or absolute local dependency path is committed. The

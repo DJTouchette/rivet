@@ -630,6 +630,13 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		text += fmt.Sprintf("\n(exit code: %d)", result.ExitCode)
 	}
 
+	// A missing witness payload is an unknown coverage result, never success.
+	// Keep this guard even when a dependency regresses its writer capture.
+	emptyWitness := strings.HasPrefix(params.Name, "witness.") && strings.TrimSpace(text) == ""
+	if emptyWitness {
+		text = "Witness returned no output; test coverage is unproven. Use witness.select to inspect the selection or run a verified project suite."
+	}
+
 	// Append nudges to recon investigation responses.
 	if reconInvestigationTools[params.Name] {
 		if !s.contextShown && s.reconCallsSinceLearn == 2 {
@@ -653,7 +660,7 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 			// ordinary result whose body merely ends in "(exit code: 1)" —
 			// indistinguishable, to a client that reads isError, from a tool that
 			// ran and found nothing to do.
-			IsError: result.ExitCode != 0,
+			IsError: result.ExitCode != 0 || emptyWitness,
 		},
 	}
 }

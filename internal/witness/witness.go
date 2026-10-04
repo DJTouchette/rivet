@@ -53,17 +53,11 @@ func Run(args []string) (stdout, stderr string, exitCode int, err error) {
 		// the agent with an unexplained exit code next to an empty stdout, which
 		// reads exactly like "there was nothing to run".
 		//
-		// The exit code stays 1 for every failure. `witness run` carries the
-		// test runner's own code in an error type that pkg/embedded does not
-		// export at PinnedVersion, and no rivet capability invokes `run` (the
-		// witness.* builtins are all `select`); non-zero is the part that
-		// matters.
-		//
-		// witness v0.5.0 exports it as embedded.ExitCodeError, with
-		// embedded.TestsFailed(err) (int, bool) to read it. When the pin moves,
-		// return that code here instead of a flat 1 so a caller can tell "the
-		// tests ran and failed" from "witness could not run them" — the same
-		// distinction the descriptions above ask the agent to make.
+		// An explicit execution call can carry a real test-runner exit code.
+		// The MCP witness.* capabilities only call select (planning).
+		if code, ok := witnessapp.TestsFailed(runErr); ok {
+			return outBuf.String(), appendError(errBuf.String(), runErr), code, nil
+		}
 		return outBuf.String(), appendError(errBuf.String(), runErr), 1, nil
 	}
 

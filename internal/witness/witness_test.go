@@ -100,7 +100,7 @@ func TestRunEmitsOneCommandPerLineForAPolyglotSelection(t *testing.T) {
 	}
 	var elixir, node bool
 	for _, l := range lines {
-		if strings.HasPrefix(l, "mix test ") {
+		if l == "mix test" || strings.HasPrefix(l, "mix test ") {
 			elixir = true
 		}
 		if strings.Contains(l, "jest") {
@@ -242,5 +242,20 @@ func commit(t *testing.T, dir string) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
+	}
+}
+
+func TestExplicitRunPreservesRunnerExitCode(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("requires a shell for the explicit fake runner")
+	}
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module example.test/fixture\n\ngo 1.25\n")
+	writeFile(t, dir, "main_test.go", "package fixture\nimport \"testing\"\nfunc TestFixture(t *testing.T) {}\n")
+	commit(t, dir)
+	t.Chdir(dir)
+	_, stderr, code, err := Run([]string{"run", "--test-cmd", "sh -c 'exit 17'", "main_test.go"})
+	if err != nil || code != 17 {
+		t.Fatalf("explicit test exit lost: code=%d err=%v stderr=%s", code, err, stderr)
 	}
 }

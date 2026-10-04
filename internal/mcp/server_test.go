@@ -1048,3 +1048,16 @@ func TestContextShowStillErrorsOnUnknownName(t *testing.T) {
 		t.Error("an unknown name should still be an error")
 	}
 }
+
+func TestWitnessEmptyPayloadIsUnproven(t *testing.T) {
+	reg := capabilities.NewRegistry()
+	reg.Register(capabilities.Capability{Name: "witness.run", Kind: capabilities.KindTool, Command: []string{"witness", "select", "--format", "exec"}, Safety: capabilities.SafetyLevelSafe, Builtin: true})
+	executor := capabilities.NewExecutor(reg)
+	executor.RegisterInProcess("witness", func([]string) (string, string, int, error) { return "", "", 0, nil })
+	s := NewServer(reg, executor, nil, pins.NewRegistry(), nil, "test", false)
+	response := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"witness.run","arguments":{}}}`)
+	b, _ := json.Marshal(response)
+	if !strings.Contains(string(b), `"isError":true`) || !strings.Contains(string(b), "unproven") {
+		t.Fatalf("empty selection looked successful: %s", b)
+	}
+}

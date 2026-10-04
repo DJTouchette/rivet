@@ -17,3 +17,8 @@ clean:
 
 install:
 	go install -ldflags "$(LDFLAGS)" ./cmd/rivet
+
+# Runs only an isolated MCP planner smoke fixture, never application tests.
+.PHONY: witness-mcp-proof
+witness-mcp-proof: build
+	python3 scripts/verify-witness-mcp.py --binary bin/rivet

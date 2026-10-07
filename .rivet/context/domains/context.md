@@ -122,6 +122,15 @@ promotion pass folds it into a curated doc.
   can run. Never add a `--yes` flag or a tool argument that approves. Clients
   that didn't advertise elicitation, or negotiated a pre-2025-06-18 protocol,
   are refused rather than approved silently.
+- **Codex specifics (verified with Codex 0.160.1, pinned in CI).** Codex
+  refuses every MCP call not annotated `readOnlyHint` under `codex exec`, so
+  tool annotations are derived from the safety label — a safe tool that writes
+  must be listed in `statefulSafeTools`. Codex auto-ACCEPTS an elicitation
+  whose schema has no properties when approvals are off with full disk access,
+  and drops the text input if a property uses keys beyond type/title/
+  description/minLength/maxLength/format/default; `approvalSchema` and its
+  test pin both. Codex reaches MCP tools from JS "code mode" as
+  `mcp__rivet__<name with . and - as _>`.
 - **The server can ask the client mid-call.** `conn.request` (`internal/mcp/client.go`)
   writes a server request and reads until its response arrives, answering pings
   inline and queueing other client messages for the main loop. Anything that

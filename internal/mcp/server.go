@@ -75,9 +75,53 @@ type resourcesCapability struct {
 
 // Tool is an MCP tool definition.
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema inputSchema `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	InputSchema inputSchema      `json:"inputSchema"`
+	Annotations *toolAnnotations `json:"annotations,omitempty"`
+}
+
+// toolAnnotations are MCP's behaviour hints (2025-03-26+). Clients use them
+// to decide which calls need the user's go-ahead: Codex refuses every MCP
+// call not marked read-only when its approval policy is "never" (codex exec),
+// so without these a read-only lookup like rivet.intent is unusable there.
+type toolAnnotations struct {
+	ReadOnlyHint    *bool `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool `json:"idempotentHint,omitempty"`
+}
+
+func hint(b bool) *bool { return &b }
+
+// statefulSafeTools are labelled [safe] (low-risk, no approval needed in
+// rivet's own terms) but change state, so they must not claim read-only.
+var statefulSafeTools = map[string]bool{"rally.pin": true, "rally.unpin": true}
+
+// annotationsFor derives the MCP hints from rivet's safety level: safe means
+// read-only, guarded means it writes but only adds, dangerous may destroy.
+func annotationsFor(name string, safety capabilities.SafetyLevel) *toolAnnotations {
+	switch {
+	case safety == capabilities.SafetyLevelSafe && statefulSafeTools[name]:
+		return &toolAnnotations{ReadOnlyHint: hint(false), DestructiveHint: hint(false), IdempotentHint: hint(true)}
+	case safety == capabilities.SafetyLevelSafe:
+		return &toolAnnotations{ReadOnlyHint: hint(true)}
+	case safety == capabilities.SafetyLevelGuarded:
+		return &toolAnnotations{ReadOnlyHint: hint(false), DestructiveHint: hint(false)}
+	case safety == capabilities.SafetyLevelDangerous:
+		return &toolAnnotations{ReadOnlyHint: hint(false), DestructiveHint: hint(true)}
+	}
+	return nil
+}
+
+// builtinSafety reads the "[safe]" / "[guarded]" / "[dangerous]" prefix every
+// built-in tool description carries, so the hint can't drift from the label.
+func builtinSafety(desc string) capabilities.SafetyLevel {
+	for _, lvl := range []capabilities.SafetyLevel{capabilities.SafetyLevelSafe, capabilities.SafetyLevelGuarded, capabilities.SafetyLevelDangerous} {
+		if strings.HasPrefix(desc, "["+string(lvl)+"]") {
+			return lvl
+		}
+	}
+	return ""
 }
 
 type inputSchema struct {
@@ -312,7 +356,9 @@ func (s *Server) Serve(in io.Reader, out io.Writer) error {
 			continue
 		}
 
+		s.conn.current = req.ID
 		resp := s.handleRequest(&req)
+		s.conn.current = nil
 		s.writeResponse(out, *resp)
 	}
 
@@ -386,6 +432,11 @@ func (s *Server) handleInitialize(req *Request) *Response {
 		version:     negotiateVersion(params.ProtocolVersion),
 		elicitation: params.Capabilities.Elicitation != nil,
 		name:        params.ClientInfo.Name,
+	}
+	// Codex sends name "codex-mcp-client" and title "Codex"; the title is
+	// what a person reading an approval record recognises.
+	if params.ClientInfo.Title != "" {
+		s.client.name = params.ClientInfo.Title
 	}
 	return &Response{
 		JSONRPC: "2.0",
@@ -680,12 +731,17 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 	)
 
+	for i := range tools {
+		tools[i].Annotations = annotationsFor(tools[i].Name, builtinSafety(tools[i].Description))
+	}
+
 	// Registered capabilities.
 	for _, cap := range caps {
 		tool := Tool{
 			Name:        cap.Name,
 			Description: toolDescription(&cap),
 			InputSchema: buildCapabilitySchema(&cap),
+			Annotations: annotationsFor(cap.Name, cap.Safety),
 		}
 
 		tools = append(tools, tool)

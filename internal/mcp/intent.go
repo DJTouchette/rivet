@@ -365,17 +365,7 @@ func (s *Server) handleIntentApprove(req *Request, args map[string]interface{}) 
 	message := "An agent asks you to ratify a business rule. Once approved, CI holds the code to it.\n\n" +
 		rivetctx.FormatProposalPlan(plan, s.intentRoot) +
 		fmt.Sprintf("\nType %s to approve it. Decline to leave the rules unchanged.", plan.RuleID)
-	res, err := ask(message, map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"confirm": map[string]interface{}{
-				"type":        "string",
-				"title":       "Type " + plan.RuleID + " to approve",
-				"description": "Typing the rule ID, rather than ticking a box, makes approving the wrong change by habit unlikely.",
-			},
-		},
-		"required": []string{"confirm"},
-	})
+	res, err := ask(message, approvalSchema(plan.RuleID))
 	if err != nil {
 		return s.textResult(req, "Not approved: could not ask the user ("+err.Error()+"). Nothing changed.", true)
 	}
@@ -411,4 +401,28 @@ func (s *Server) handleIntentApprove(req *Request, args map[string]interface{}) 
 	}
 	return s.textResult(req, fmt.Sprintf("The user approved it: %s %s in %s is now a ratified rule (recorded as approved by %s).\n\n%s",
 		prop.Change, plan.RuleID, plan.DocName, approver, next), false)
+}
+
+// approvalSchema is the form the person fills in. Two client constraints
+// shape it, both verified against Codex 0.160:
+//
+//   - It must have a property. Codex auto-accepts an elicitation whose schema
+//     has no properties when it runs with approvals off and full disk access,
+//     so an empty "just confirm" schema would approve with nobody there.
+//   - Each property may use only type, title, description, minLength,
+//     maxLength, format and default. Codex parses fields strictly and, on any
+//     other key (pattern, say), silently falls back to a bare accept/decline
+//     with no input — and the typed-ID check would then reject every approval.
+func approvalSchema(ruleID string) map[string]interface{} {
+	return map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"confirm": map[string]interface{}{
+				"type":        "string",
+				"title":       "Type " + ruleID + " to approve",
+				"description": "Typing the rule ID, rather than ticking a box, makes approving the wrong change by habit unlikely.",
+			},
+		},
+		"required": []string{"confirm"},
+	}
 }

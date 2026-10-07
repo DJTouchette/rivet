@@ -46,6 +46,7 @@ type initializeParams struct {
 	} `json:"capabilities"`
 	ClientInfo struct {
 		Name    string `json:"name"`
+		Title   string `json:"title"`
 		Version string `json:"version"`
 	} `json:"clientInfo"`
 }
@@ -66,7 +67,15 @@ type conn struct {
 	mu      sync.Mutex // serialises writes
 	queue   [][]byte   // client messages read while waiting on a response
 	nextID  int
+	// current is the id of the client request being handled. If the client
+	// cancels it (notifications/cancelled) while we wait on a request of our
+	// own, the wait ends: nobody is left to receive the answer.
+	current json.RawMessage
 }
+
+// errCancelled means the client cancelled the request we were serving —
+// typically a tool-call timeout while the person was still reading a prompt.
+var errCancelled = errors.New("the client cancelled this call before the user answered (a tool-call timeout?)")
 
 func (c *conn) write(v interface{}) error {
 	data, err := json.Marshal(v)
@@ -99,12 +108,16 @@ func (c *conn) next() ([]byte, bool) {
 	return nil, false
 }
 
-// clientResponse is a JSON-RPC response from the client to a server request.
+// clientResponse is a JSON-RPC message from the client while we wait: the
+// response to our request, or anything else it sends meanwhile.
 type clientResponse struct {
 	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
 	Result json.RawMessage `json:"result"`
 	Error  *RPCError       `json:"error"`
+	Params struct {
+		RequestID json.RawMessage `json:"requestId"`
+	} `json:"params"`
 }
 
 // errNoClient means there is no live stream to ask over (HandleMessage, tests).
@@ -138,6 +151,9 @@ func (c *conn) request(method string, params interface{}) (json.RawMessage, erro
 				return nil, fmt.Errorf("client refused %s: %s", method, r.Error.Message)
 			}
 			return r.Result, nil
+		}
+		if r.Method == "notifications/cancelled" && c.current != nil && string(r.Params.RequestID) == string(c.current) {
+			return nil, errCancelled
 		}
 		if r.Method == "ping" && r.ID != nil {
 			_ = c.write(Response{JSONRPC: "2.0", ID: r.ID, Result: map[string]interface{}{}})

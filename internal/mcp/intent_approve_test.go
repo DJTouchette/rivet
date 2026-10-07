@@ -160,7 +160,7 @@ func TestIntentApproveOverTheWire(t *testing.T) {
 		return m
 	}
 
-	send(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}},"clientInfo":{"name":"test-client"}}}`)
+	send(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}},"clientInfo":{"name":"test-client","title":"Test Client"}}}`)
 	if v := recv()["result"].(map[string]interface{})["protocolVersion"]; v != "2025-06-18" {
 		t.Fatalf("negotiated %v", v)
 	}
@@ -194,7 +194,7 @@ func TestIntentApproveOverTheWire(t *testing.T) {
 		t.Fatalf("expected the tool call's reply first, got %v", first)
 	}
 	text := first["result"].(map[string]interface{})["content"].([]interface{})[0].(map[string]interface{})["text"].(string)
-	if !strings.Contains(text, "is now a ratified rule") || !strings.Contains(text, "confirmed in test-client") {
+	if !strings.Contains(text, "is now a ratified rule") || !strings.Contains(text, "confirmed in Test Client") {
 		t.Fatalf("approve reply = %s", text)
 	}
 	if second := recv(); second["id"] != float64(9) {
@@ -233,5 +233,87 @@ func TestIntentApproveRefusedWithoutElicitationCapability(t *testing.T) {
 	}
 	if billingDoc(t, root) != before {
 		t.Fatal("approved without asking")
+	}
+}
+
+// TestIntentApproveStopsWaitingWhenCancelled: Codex times MCP tool calls out
+// and cancels them. A person still reading the prompt must not leave the
+// server blocked forever, and nothing may be applied.
+func TestIntentApproveStopsWaitingWhenCancelled(t *testing.T) {
+	s, root, name := approveProject(t)
+	before := billingDoc(t, root)
+	in := strings.NewReader(strings.Join([]string{
+		`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{"form":{},"url":{}}},"clientInfo":{"name":"codex-mcp-client"}}}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"rivet.intent-approve","arguments":{"proposal":"` + name + `"}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":5,"reason":"timed out"}}`,
+		`{"jsonrpc":"2.0","id":6,"method":"ping"}`,
+	}, "\n") + "\n")
+	var out strings.Builder
+	if err := s.Serve(in, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "elicitation/create") || !strings.Contains(got, "cancelled this call before the user answered") {
+		t.Fatalf("output:\n%s", got)
+	}
+	if !strings.Contains(got, `"id":6`) {
+		t.Fatalf("server stopped serving after the cancellation:\n%s", got)
+	}
+	if billingDoc(t, root) != before {
+		t.Fatal("applied after the call was cancelled")
+	}
+}
+
+// TestApprovalSchemaFitsCodex pins the form to what Codex can render as a
+// text input and will never auto-accept. See approvalSchema.
+func TestApprovalSchemaFitsCodex(t *testing.T) {
+	schema := approvalSchema("BIL-012")
+	props := schema["properties"].(map[string]interface{})
+	if len(props) == 0 {
+		t.Fatal("an elicitation schema without properties is auto-accepted by Codex under approval_policy=never")
+	}
+	allowed := map[string]bool{"type": true, "title": true, "description": true, "minLength": true, "maxLength": true, "format": true, "default": true}
+	for name, raw := range props {
+		for key := range raw.(map[string]interface{}) {
+			if !allowed[key] {
+				t.Errorf("property %q uses %q: Codex would drop the text input and fall back to accept/decline", name, key)
+			}
+		}
+		if raw.(map[string]interface{})["default"] != nil {
+			t.Errorf("property %q has a default — a pre-filled confirmation defeats typing it", name)
+		}
+	}
+}
+
+// TestToolAnnotations: clients gate calls on these. Codex refuses every MCP
+// call not marked read-only under approval_policy=never (codex exec), so the
+// lookups must say so — and nothing that writes may claim it.
+func TestToolAnnotations(t *testing.T) {
+	s := newTestServer(t)
+	resp := call(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+	var result toolsListResult
+	unmarshalResult(t, resp, &result)
+	readOnly := map[string]bool{}
+	for _, tl := range result.Tools {
+		if tl.Annotations == nil || tl.Annotations.ReadOnlyHint == nil {
+			t.Errorf("%s has no readOnlyHint", tl.Name)
+			continue
+		}
+		readOnly[tl.Name] = *tl.Annotations.ReadOnlyHint
+	}
+	for _, name := range []string{"rivet.context-list", "rivet.context-show", "rivet.context-recommend", "rivet.runbook", "rivet.intent", "echo-test"} {
+		if !readOnly[name] {
+			t.Errorf("%s should be read-only", name)
+		}
+	}
+	for _, name := range []string{"rivet.learn", "rivet.runbook-draft", "rivet.intent-propose", "rivet.intent-approve", "rally.pin", "rally.unpin", "danger-cmd"} {
+		if readOnly[name] {
+			t.Errorf("%s writes, so it must not claim read-only", name)
+		}
+	}
+	for _, tl := range result.Tools {
+		if tl.Name == "danger-cmd" && (tl.Annotations.DestructiveHint == nil || !*tl.Annotations.DestructiveHint) {
+			t.Error("dangerous capabilities must be marked destructive")
+		}
 	}
 }

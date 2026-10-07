@@ -285,6 +285,12 @@ rivet intent reject add-bil-012-46d767 --reason "covered by BIL-001"
 - **Approving records it.** It writes the doc, sets `last_ratified`, and archives the proposal in `proposals/archive/` with your git identity and the client you confirmed in. Rejecting archives it with your reason.
 - **Unreviewed drafts are visible in CI.** Pending proposals show as `open-proposal` warnings, so `--strict` CI fails on a branch carrying drafts nobody has decided on.
 - **An approved rule is enforced from then on.** A newly approved invariant fails the check until code and tests are marked as enforcing it.
+- **It works in Codex too.** Verified against Codex 0.160.1:
+  - In the interactive TUI, Codex first asks you to allow the `rivet.intent-approve` call. It then shows Rivet's form (the diff plus a text field), and what you type goes back to Rivet.
+  - `codex exec` refuses the call outright, because its approval policy is "never".
+  - With `--dangerously-bypass-approvals-and-sandbox`, Codex declines Rivet's prompt, because nobody is there to answer it.
+
+  Rivet's read-only tools (`rivet.intent`, `rivet.context-*`, recon, witness) carry MCP's `readOnlyHint`, so they run under `codex exec`, which otherwise refuses every MCP call.
 - **It doesn't stop direct file edits.** An agent with file access can still edit `.rivet/intent/` directly, as can anyone. Protect that path with code review, for example a `CODEOWNERS` entry for `.rivet/intent/`.
 
 **Diff-aware test selection.** `rivet intent affected` (or `--since main`, or `--staged`) lists every rule a change touches: rules marked in changed files, rules whose doc governs a changed file, markers added or removed, and edits to the rule text itself (with before and after). It also lists the tests marked for those rules. When witness selects tests over MCP, the same list is added as a second content block, so the tests that prove a business rule still holds get run even when no import graph connects them to the change.

@@ -47,6 +47,17 @@ jobs:
             exit 1
           fi
 
+      # The real Codex CLI driving `rivet serve`: read-only tools must run
+      # under `codex exec`, and intent approval must never succeed without a
+      # person (Codex declines rivet's prompt when nobody can answer it). The
+      # test skips without codex, so it only means something where codex is
+      # installed. Pinned: bump deliberately and re-run.
+      - name: Codex end-to-end
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npm install -g @openai/codex@0.160.1
+          go test ./internal/cli -run CodexEndToEnd -count=1 -v
+
       # Rivet's own context docs are held to the standard rivet asks of every
       # project. --strict fails on warnings too, so a broken [[link]] or a doc
       # drifting past its review date breaks the build rather than rotting

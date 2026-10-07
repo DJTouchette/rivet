@@ -59,7 +59,8 @@ promotion pass folds it into a curated doc.
 - `intent_refs.go` — marker scan via `git grep` (worktree, index, or a rev); `IsTestFile`
 - `intent_check.go` — `CheckIntent` coverage and the per-doc intent lint rules
 - `intent_affected.go` — `Affected`: rules a diff touches, marker add/remove, rule-text diffs
-- `intent_propose.go` — agent proposals, written where `LoadIntent` never reads
+- `intent_propose.go` — agent drafts (`NextRuleID`, base fingerprint), written where `LoadIntent` never reads
+- `intent_apply.go` — the person's half: `PlanProposal` (exact edit + re-parse check), `ApplyProposalPlan`, `RejectIntentProposal`, archive
 
 ## Failure modes
 
@@ -112,6 +113,12 @@ promotion pass folds it into a curated doc.
 - **A scan failure is an error, not an empty result.** `CheckIntentInTree`
   reports `intent-scan-failed` rather than "no markers", which would fail every
   invariant for the wrong reason — or, for a project with only policies, pass.
+- **Supervised rule writing is gated in the CLI, not the library.** Anything
+  linking package context can call `ApplyProposalPlan`; what keeps agents from
+  ratifying their own drafts is `rivet intent approve` refusing a non-terminal
+  stdin. Don't expose approval over MCP or behind a `--yes` flag — either would
+  hand the decision to the agent. Approval is refused when the rule's
+  fingerprint or the doc changed after drafting/review (`ErrProposalStale`).
 - Intent docs are named `intent/<file>` so they never collide with the domain
   doc they govern, and inherit its `related_paths` when they declare none.
 - Lint exits non-zero on errors, or on anything with `--strict`. CI runs

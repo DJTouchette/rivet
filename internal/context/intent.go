@@ -88,6 +88,9 @@ type Rule struct {
 	Doc             string `json:"doc"`  // name of the intent doc defining it
 	Path            string `json:"path"` // file the rule lives in
 	Line            int    `json:"line"` // 1-based line of the rule's bullet in Path
+	// EndLine is the last line of the rule's block (bullet plus continuation
+	// lines), so the block can be replaced or moved when a proposal is applied.
+	EndLine int `json:"-"`
 	// OutsideSection is true when the rule was found outside an Invariants,
 	// Policies, or Retired section, so its class is a guess.
 	OutsideSection bool `json:"-"`
@@ -309,6 +312,7 @@ func ParseRules(docName, path, body string, lineOffset int) []Rule {
 				Doc:            docName,
 				Path:           path,
 				Line:           lineOffset + i + 1,
+				EndLine:        lineOffset + i + 1,
 				OutsideSection: !sectionKnown,
 			}
 			curIndent = len(m[1])
@@ -327,6 +331,7 @@ func ParseRules(docName, path, body string, lineOffset int) []Rule {
 			flush()
 			continue
 		}
+		cur.EndLine = lineOffset + i + 1
 		if km := ruleKeyRe.FindStringSubmatch(trimmed); km != nil {
 			val := strings.TrimSpace(km[2])
 			switch km[1] {

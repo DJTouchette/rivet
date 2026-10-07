@@ -351,7 +351,8 @@ Intent docs (.rivet/intent/) — see 'rivet intent check --help' for the full li
   unknown-rule-reference       — a marker naming an undefined rule (error)
   retired-rule-reference       — a marker naming a retired rule (error)
   untested-invariant, unenforced-policy, pending-enforcement,
-  missing-rationale, missing-ratification, stale-ratification, ...
+  missing-rationale, missing-ratification, stale-ratification,
+  open-proposal (an agent-drafted rule change awaiting a person), ...
 
 Wiki docs are free-form and often imported, so only the universal rules apply.
 Code-extracted docs are exempt from frontmatter rules — a rivet:context comment
@@ -391,6 +392,7 @@ with --strict.`,
 			if len(intents) > 0 {
 				coverage := rivetctx.CheckIntentInTree(intents, ".", intentScanOptions())
 				result.Warnings = append(result.Warnings, coverage.Warnings...)
+				result.Warnings = append(result.Warnings, rivetctx.ProposalWarnings(rivetctx.IntentDir)...)
 			}
 
 			// A findings-based exit code is what makes this usable in CI. Usage

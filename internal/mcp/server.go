@@ -519,7 +519,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			Description: "[safe] Business rules (intent) the code must keep — ratified by people, so they are requirements, not descriptions. " +
 				"Call BEFORE changing business logic. Give exactly one of: 'path' (rules governing a file and markers in it), 'id' (one rule, e.g. 'BIL-001', with the code and tests enforcing it), " +
 				"'query' (rules relevant to a task), or 'changes'/'since'/'staged' (rules your change touches and the tests that verify them — run those tests). No arguments lists every intent doc. " +
-				"If a change would break a rule, stop and ask the user; never edit .rivet/intent/ — use rivet.intent-propose.",
+				"If a change would break a rule, stop and ask the user. To write or change a rule, draft it with rivet.intent-propose for the user to approve; never edit .rivet/intent/ directly.",
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -552,9 +552,10 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		Tool{
 			Name: "rivet.intent-propose",
-			Description: "[guarded] Propose adding, amending, or retiring a business rule. Writes to .rivet/intent/proposals/ for a PERSON to decide — " +
-				"it changes nothing: rules are never edited by agents, and the code must keep meeting the current rule until a person updates it. " +
-				"Use when the user tells you a rule changed, when code and a rule conflict and the rule looks wrong, or when you find an unwritten rule the code clearly depends on. Then tell the user a proposal is waiting.",
+			Description: "[guarded] Draft a business rule — add a new one, amend one, or retire one — for a PERSON to approve. " +
+				"Writes a complete, ready-to-apply proposal to .rivet/intent/proposals/; it is not a rule until the user approves it with 'rivet intent approve' in their terminal, so the code must keep meeting the current rules meanwhile. " +
+				"Use it when the user asks you to write or change a rule, when you find an unwritten rule the code clearly depends on, or when code and a rule conflict and the rule looks wrong. " +
+				"New rules get the next free ID automatically. Write the statement as a requirement in business terms, and always give the business reason. Never edit .rivet/intent/ directly and never run approve yourself.",
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -565,23 +566,37 @@ func (s *Server) handleToolsList(req *Request) *Response {
 					},
 					"doc": map[string]interface{}{
 						"type":        "string",
-						"description": "Intent doc the change targets (e.g. 'intent/billing'). For amend/retire it defaults to the doc defining rule_id.",
+						"description": "Intent doc to add the rule to (e.g. 'intent/billing'); a name that doesn't exist yet creates that doc on approval. For amend/retire it defaults to the doc defining rule_id.",
 					},
 					"rule_id": map[string]interface{}{
 						"type":        "string",
-						"description": "The rule to amend or retire (e.g. 'BIL-010'). Omit for add — a person assigns the new ID.",
+						"description": "The rule to amend or retire (e.g. 'BIL-010'). Omit for add.",
+					},
+					"class": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{string(rivetctx.RuleInvariant), string(rivetctx.RulePolicy)},
+						"description": "invariant (must always hold; breaking it is a defect) or policy (a business decision that may change). Defaults to invariant for add, the current class for amend.",
 					},
 					"statement": map[string]interface{}{
 						"type":        "string",
-						"description": "The proposed rule text (required for add and amend).",
+						"description": "The rule as it should read, one or two sentences (required for add and amend).",
 					},
 					"why": map[string]interface{}{
 						"type":        "string",
-						"description": "The business reason for the change, and who asked for it if a person did.",
+						"description": "The business reason — for retire, why it no longer applies. Say who asked if a person did.",
+					},
+					"enforcement": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional. 'manual — <who or what checks it>' for a rule enforced outside the code, or 'pending' for a known gap. Omit when code will enforce it.",
+					},
+					"scope": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{string(rivetctx.IntentScopeDomain), string(rivetctx.IntentScopeCrossCutting)},
+						"description": "Only when adding to a new doc: domain (default) or cross-cutting.",
 					},
 					"evidence": map[string]interface{}{
 						"type":        "string",
-						"description": "What prompted it: the conflicting code (file:line), a ticket, the user's words (optional).",
+						"description": "What prompted it: the code (file:line), a ticket, the user's words (optional).",
 					},
 					"author": map[string]interface{}{
 						"type":        "string",

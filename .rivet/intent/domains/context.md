@@ -17,7 +17,7 @@ itself or another agent — with the authority of something a person decided.
 
 - **CTX-001** An agent-drafted runbook is never retrievable until a person promotes it.
   why: a wrong runbook followed under pressure is worse than none
-- **CTX-002** Agents never change ratified intent. Their rule changes are
+- **CTX-002** Agents never edit ratified intent directly. Their rule changes are
   proposals under .rivet/intent/proposals/, which are never loaded as intent.
   why: a rule an agent wrote would carry the authority of one the business
   decided — "the code does X, so X is the rule" is how a bug becomes policy
@@ -25,6 +25,11 @@ itself or another agent — with the authority of something a person decided.
   a marker naming a retired rule fails it, and a proposal cannot add a rule
   under an ID that exists.
   why: every marker naming the ID would silently start pointing at a different rule
+- **CTX-004** Agents may draft rules, but a drafted rule takes effect only when
+  a person approves it at an interactive terminal, and approval refuses a
+  draft written against a rule that has since changed.
+  why: rules carry the business's authority; a person must decide each one,
+  and must never overwrite a newer decision by approving an older draft
 
 ## Policies
 

@@ -876,7 +876,7 @@ func TestIntentHarness_MCPProposalsNeverChangeRules(t *testing.T) {
 			"why":       "Finance shortened the collection window (user request).",
 			"evidence":  "services/billing/dunning.ts:2",
 		}),
-		toolCall("rivet.intent-propose", map[string]interface{}{"change": "add", "rule_id": "BIL-001", "statement": "x", "why": "y"}),
+		toolCall("rivet.intent-propose", map[string]interface{}{"change": "add", "doc": "billing", "rule_id": "BIL-001", "statement": "x", "why": "y"}),
 		toolCall("rivet.intent-propose", map[string]interface{}{"change": "amend", "rule_id": "BIL-777", "statement": "x", "why": "y"}),
 		toolCall("rivet.intent-propose", map[string]interface{}{"change": "amend", "rule_id": "BIL-010", "statement": "x"}),
 		toolCall("rivet.intent-propose", map[string]interface{}{"change": "retire", "rule_id": "BIL-003", "why": "y"}),
@@ -886,8 +886,8 @@ func TestIntentHarness_MCPProposalsNeverChangeRules(t *testing.T) {
 	if r[0].Result.IsError {
 		t.Fatalf("valid proposal refused: %s", r[0].text())
 	}
-	requireContains(t, "propose reply", r[0].text(), ".rivet/intent/proposals/", "changes NOTHING")
-	for i, why := range map[int]string{1: "reusing an ID", 2: "amending an unknown rule", 3: "omitting why", 4: "retiring a retired rule"} {
+	requireContains(t, "propose reply", r[0].text(), ".rivet/intent/proposals/", "NOT a rule yet", "rivet intent approve", "Never run approve yourself")
+	for i, why := range map[int]string{1: "choosing its own ID", 2: "amending an unknown rule", 3: "omitting why", 4: "retiring a retired rule"} {
 		if !r[i].Result.IsError {
 			t.Errorf("proposal %s must be refused, got: %s", why, r[i].text())
 		}
@@ -903,8 +903,18 @@ func TestIntentHarness_MCPProposalsNeverChangeRules(t *testing.T) {
 	list := s.run("intent", "list").stdout
 	requireContains(t, "intent list", list, "BIL-010 [policy] Dunning reminders start 14 days")
 	requireNotContains(t, "intent list", list, "7 days", "proposal")
-	if rep, code := s.check(); code != 0 {
-		t.Fatalf("a filed proposal must not affect the check: %v", findings(rep))
+	// Pending proposals don't change coverage, but they are visible: a
+	// warning each, so --strict CI fails on a branch carrying unreviewed ones.
+	rep, code := s.check()
+	if code != 0 {
+		t.Fatalf("a filed proposal must not fail the check by itself: %v", findings(rep))
+	}
+	requireFinding(t, rep, "open-proposal", rivetctx.SeverityWarning, "amend BIL-010")
+	if _, code := s.check("--strict"); code == 0 {
+		t.Fatal("--strict must fail while agent-drafted proposals await a person")
+	}
+	if lint := s.run("context", "lint", "--strict"); lint.code == 0 {
+		t.Fatal("context lint --strict must fail on open proposals too")
 	}
 
 	props := s.run("intent", "proposals", "--json")
@@ -917,6 +927,9 @@ func TestIntentHarness_MCPProposalsNeverChangeRules(t *testing.T) {
 	}
 	found := false
 	for _, p := range listed {
+		if p.Change == "add" && p.RuleID != "BIL-012" {
+			t.Errorf("an added rule must get the next free ID (BIL-012, after BIL-011), got %s", p.RuleID)
+		}
 		if p.Change == "amend" && p.RuleID == "BIL-010" && p.Doc == "intent/billing" {
 			found = true
 			requireContains(t, "proposal file", s.read(p.Path), "- **BIL-010** Dunning reminders start 7 days", "why: Finance shortened", "services/billing/dunning.ts:2")
@@ -1005,4 +1018,179 @@ func TestIntentHarness_SyncListsIntentDocs(t *testing.T) {
 	requireContains(t, "CLAUDE.md", s.read("CLAUDE.md"),
 		"**Business rules (intent):** intent/billing, intent/money, intent/orders",
 		"### Business rules (intent)", "`rivet.intent`")
+}
+
+// ---------------------------------------------------------------------------
+// Supervised rule writing: the agent drafts, a person approves
+// ---------------------------------------------------------------------------
+
+// runInTerminal runs rivet under a pseudo-terminal, typing input, the way a
+// person at a shell would. It uses util-linux script(1), so it only runs on
+// Linux; the refusal path (no terminal) is tested everywhere.
+func (s *shop) runInTerminal(input string, args ...string) runResult {
+	s.t.Helper()
+	if runtime.GOOS != "linux" {
+		s.t.Skip("pseudo-terminal approval is exercised on Linux only")
+	}
+	if _, err := exec.LookPath("script"); err != nil {
+		s.t.Skip("script(1) not available")
+	}
+	quoted := []string{shellQuote(s.bin)}
+	for _, a := range args {
+		quoted = append(quoted, shellQuote(a))
+	}
+	cmd := exec.Command("script", "-qec", strings.Join(quoted, " "), "/dev/null")
+	cmd.Dir = s.dir
+	cmd.Env = append(os.Environ(), "HOME="+s.home, "XDG_CONFIG_HOME="+filepath.Join(s.home, ".config"), "RIVET_EMBED_BACKEND=")
+	cmd.Stdin = strings.NewReader(input)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err := cmd.Run()
+	code := 0
+	if ee, ok := err.(*exec.ExitError); ok {
+		code = ee.ExitCode()
+	} else if err != nil {
+		s.t.Fatalf("script: %v", err)
+	}
+	return runResult{stdout: out.String(), code: code}
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// proposalName pulls the proposal name out of a rivet.intent-propose reply.
+func proposalName(t *testing.T, reply string) string {
+	t.Helper()
+	for _, line := range strings.Split(reply, "\n") {
+		if f := strings.Fields(line); len(f) >= 3 && f[0] == "rivet" && f[2] == "approve" {
+			return f[3]
+		}
+	}
+	t.Fatalf("no approve command in reply:\n%s", reply)
+	return ""
+}
+
+func TestIntentHarness_AgentCannotApproveItsOwnRule(t *testing.T) {
+	s := newShop(t)
+	before := s.read(".rivet/intent/domains/billing.md")
+	r := s.mcp(toolCall("rivet.intent-propose", map[string]interface{}{
+		"change": "add", "doc": "intent/billing", "statement": "A credit note never exceeds the invoice it corrects.",
+		"why": "finance: over-crediting is a refund loophole", "author": "claude",
+	}))
+	name := proposalName(t, r[0].text())
+
+	// An agent's shell is non-interactive: piping the confirmation in, or
+	// passing nothing at all, is refused before anything is read or written.
+	for _, input := range []string{"BIL-012\n", ""} {
+		cmd := exec.Command(s.bin, "intent", "approve", name)
+		cmd.Dir = s.dir
+		cmd.Env = append(os.Environ(), "HOME="+s.home)
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("approve without a terminal succeeded:\n%s", out)
+		}
+		requireContains(t, "non-interactive approve", string(out), "interactive terminal")
+	}
+	if s.read(".rivet/intent/domains/billing.md") != before {
+		t.Fatal("refused approval still changed the doc")
+	}
+	if rep, _ := s.check(); statuses(rep)["BIL-012"] != "" {
+		t.Fatal("an unapproved rule is being enforced")
+	}
+}
+
+// rivet:intent CTX-004
+func TestIntentHarness_SupervisedRuleWriting(t *testing.T) {
+	s := newShop(t)
+	s.git("config", "user.name", "Pat Person")
+	s.git("config", "user.email", "pat@example.com")
+
+	// 1. The agent drafts a new invariant, a new doc, and an amendment.
+	r := s.mcp(
+		toolCall("rivet.intent-propose", map[string]interface{}{
+			"change": "add", "doc": "intent/billing", "statement": "A credit note never exceeds the invoice it corrects.",
+			"why": "finance: over-crediting is a refund loophole", "author": "claude", "evidence": "user asked in chat",
+		}),
+		toolCall("rivet.intent-propose", map[string]interface{}{
+			"change": "add", "doc": "shipping", "class": "policy", "scope": "cross-cutting",
+			"statement": "Parcels ship within two business days.", "why": "the SLA we sell",
+		}),
+		toolCall("rivet.intent-propose", map[string]interface{}{
+			"change": "amend", "rule_id": "BIL-010", "statement": "Dunning reminders start 7 days after the due date.",
+			"why": "finance shortened the window",
+		}),
+	)
+	addName, shipName, amendName := proposalName(t, r[0].text()), proposalName(t, r[1].text()), proposalName(t, r[2].text())
+	requireContains(t, "new-doc reply", r[1].text(), "Approving it creates intent/shipping")
+
+	// 2. The person reviews the exact edit.
+	review := s.run("intent", "review", addName)
+	if review.code != 0 {
+		t.Fatalf("review: %s%s", review.stdout, review.stderr)
+	}
+	requireContains(t, "review", review.stdout, "add BIL-012 in intent/billing (invariant)", "drafted", "by claude",
+		"Changes .rivet/intent/domains/billing.md", "+ - **BIL-012** A credit note never exceeds the invoice it corrects.",
+		"+   why: finance: over-crediting is a refund loophole")
+
+	// 3. A wrong confirmation approves nothing.
+	no := s.runInTerminal("BIL-999\n", "intent", "approve", addName)
+	requireContains(t, "cancelled approve", no.stdout, "Not approved; nothing changed.")
+	requireNotContains(t, "billing.md", s.read(".rivet/intent/domains/billing.md"), "BIL-012")
+
+	// 4. Typing the rule ID at a terminal approves it.
+	yes := s.runInTerminal("BIL-012\n", "intent", "approve", addName)
+	if yes.code != 0 {
+		t.Fatalf("approve: %s", yes.stdout)
+	}
+	requireContains(t, "approve", yes.stdout, "Approved by Pat Person <pat@example.com>: add BIL-012 in intent/billing")
+	doc := s.read(".rivet/intent/domains/billing.md")
+	requireContains(t, "billing.md", doc, "- **BIL-012** A credit note never exceeds the invoice it corrects.", "last_ratified: 20")
+	requireNotContains(t, "billing.md", doc, "last_ratified: 2099-01-01")
+	archived := s.read(".rivet/intent/proposals/archive/" + addName + ".md")
+	requireContains(t, "archived proposal", archived, "status: approved", "approved_by: Pat Person <pat@example.com>", "applied_as: BIL-012")
+
+	// 5. The approved rule is now held against the code like any other.
+	rep, code := s.check()
+	if code == 0 {
+		t.Fatal("a freshly approved invariant with no marker must fail CI")
+	}
+	requireFinding(t, rep, "unenforced-invariant", rivetctx.SeverityError, "BIL-012")
+	s.write("services/billing/credit.go", "package billing\n\n// "+mk+" BIL-012\nfunc Credit() {}\n")
+	s.write("services/billing/credit_test.go", "package billing\n\n// "+mk+" BIL-012\nfunc TestCredit() {}\n")
+	if rep, _ := s.check(); statuses(rep)["BIL-012"] != rivetctx.CoverageEnforced {
+		t.Fatalf("BIL-012 = %q after marking code and test", statuses(rep)["BIL-012"])
+	}
+
+	// 6. The new-doc proposal creates the doc when approved.
+	ship := s.runInTerminal("SHI-001\n", "intent", "approve", shipName)
+	if ship.code != 0 {
+		t.Fatalf("approve shipping: %s", ship.stdout)
+	}
+	requireContains(t, "shipping doc", s.read(".rivet/intent/cross-cutting/shipping.md"), "prefix: SHI", "## Policies", "- **SHI-001** Parcels ship within two business days.")
+
+	// 7. A person edits BIL-010 by hand after the amendment was drafted:
+	// approving the stale draft would overwrite their decision, so it's refused.
+	s.edit(".rivet/intent/domains/billing.md", "start 14 days after", "start 10 days after")
+	stale := s.runInTerminal("BIL-010\n", "intent", "approve", amendName)
+	if stale.code == 0 {
+		t.Fatalf("stale amendment approved:\n%s", stale.stdout)
+	}
+	requireContains(t, "stale approve", stale.stdout, "changed after this proposal was drafted")
+	requireContains(t, "billing.md", s.read(".rivet/intent/domains/billing.md"), "start 10 days after")
+
+	// 8. ...so the person rejects it, and nothing is left pending.
+	rej := s.run("intent", "reject", amendName, "--reason", "superseded by the 10-day decision")
+	if rej.code != 0 {
+		t.Fatalf("reject: %s%s", rej.stdout, rej.stderr)
+	}
+	requireContains(t, "rejected proposal", s.read(".rivet/intent/proposals/archive/"+amendName+".md"),
+		"status: rejected", "reject_reason: superseded by the 10-day decision", "rejected_by: Pat Person")
+	if out := s.run("intent", "proposals").stdout; !strings.Contains(out, "No intent proposals awaiting review.") {
+		t.Fatalf("proposals left pending:\n%s", out)
+	}
+	for _, w := range func() []rivetctx.LintWarning { rep, _ := s.check(); return rep.Warnings }() {
+		if w.Rule == "open-proposal" {
+			t.Fatalf("decided proposal still flagged: %s", w.Message)
+		}
+	}
 }

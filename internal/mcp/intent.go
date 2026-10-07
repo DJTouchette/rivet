@@ -126,49 +126,91 @@ func relTo(root, p string) string {
 	return filepath.ToSlash(filepath.Clean(p))
 }
 
-// handleIntentPropose implements rivet.intent-propose. It validates the
-// proposal against the loaded rules — an amendment to a rule that doesn't
-// exist, or an add that reuses an ID, is refused here rather than left for a
-// person to discover — and files it. It never modifies a loaded intent doc.
+// handleIntentPropose implements rivet.intent-propose: the agent's half of
+// supervised rule writing. It drafts a complete change — for an add, under the
+// next free ID — validated against the loaded rules, and records the current
+// rule's fingerprint so a stale proposal can't be approved over a newer
+// decision. It never modifies a loaded intent doc; a person applies the draft
+// with `rivet intent approve`.
 // rivet:intent CTX-002, CTX-003
 func (s *Server) handleIntentPropose(req *Request, args map[string]interface{}) *Response {
 	p := rivetctx.NewIntentProposal{
-		Change:    stringArg(args, "change"),
-		Doc:       strings.TrimSpace(stringArg(args, "doc")),
-		RuleID:    strings.TrimSpace(stringArg(args, "rule_id")),
-		Statement: stringArg(args, "statement"),
-		Why:       stringArg(args, "why"),
-		Evidence:  stringArg(args, "evidence"),
-		Author:    stringArg(args, "author"),
-	}
-	change := strings.ToLower(strings.TrimSpace(p.Change))
-
-	if p.RuleID != "" {
-		r, doc := rivetctx.FindRule(s.intents, p.RuleID)
-		switch {
-		case change == rivetctx.ProposeAdd && r != nil:
-			return s.textResult(req, fmt.Sprintf("Error: %s already exists in %s — rule IDs are never reused. Omit rule_id and a person will assign one, or propose to amend %s.", p.RuleID, doc.Name, p.RuleID), true)
-		case change != rivetctx.ProposeAdd && r == nil:
-			return s.textResult(req, fmt.Sprintf("Error: no intent doc defines %s. Call rivet.intent with no arguments to list the rules.", p.RuleID), true)
-		case change != rivetctx.ProposeAdd && !r.Active() && change == rivetctx.ProposeRetire:
-			return s.textResult(req, fmt.Sprintf("Error: %s is already retired.", p.RuleID), true)
-		case r != nil && p.Doc == "":
-			p.Doc = doc.Name
-		}
+		Change:      strings.ToLower(strings.TrimSpace(stringArg(args, "change"))),
+		Doc:         strings.TrimSpace(stringArg(args, "doc")),
+		RuleID:      strings.TrimSpace(stringArg(args, "rule_id")),
+		Class:       rivetctx.RuleClass(strings.TrimSpace(stringArg(args, "class"))),
+		Statement:   stringArg(args, "statement"),
+		Why:         stringArg(args, "why"),
+		Enforcement: strings.TrimSpace(stringArg(args, "enforcement")),
+		Scope:       rivetctx.IntentScope(strings.TrimSpace(stringArg(args, "scope"))),
+		Evidence:    stringArg(args, "evidence"),
+		Author:      stringArg(args, "author"),
 	}
 	if p.Doc != "" && !strings.HasPrefix(p.Doc, "intent/") {
 		p.Doc = "intent/" + p.Doc
+	}
+
+	switch p.Change {
+	case rivetctx.ProposeAdd:
+		if p.RuleID != "" {
+			return s.textResult(req, "Error: omit rule_id when adding a rule — the next free ID is assigned for you, and IDs are never reused.", true)
+		}
+		if p.Doc == "" {
+			return s.textResult(req, "Error: 'doc' is required to add a rule (an existing intent doc such as 'intent/billing', or a new one to create).", true)
+		}
+		var doc *rivetctx.Document
+		for _, d := range s.intents {
+			if d.Name == p.Doc {
+				doc = d
+			}
+		}
+		p.RuleID = rivetctx.NextRuleID(s.intents, doc, p.Doc)
+	case rivetctx.ProposeAmend, rivetctx.ProposeRetire:
+		if p.RuleID == "" {
+			return s.textResult(req, fmt.Sprintf("Error: 'rule_id' is required to %s a rule.", p.Change), true)
+		}
+		r, doc := rivetctx.FindRule(s.intents, p.RuleID)
+		if r == nil {
+			return s.textResult(req, fmt.Sprintf("Error: no intent doc defines %s. Call rivet.intent with no arguments to list the rules.", p.RuleID), true)
+		}
+		if p.Change == rivetctx.ProposeRetire && !r.Active() {
+			return s.textResult(req, fmt.Sprintf("Error: %s is already retired.", p.RuleID), true)
+		}
+		if p.Doc != "" && p.Doc != doc.Name {
+			return s.textResult(req, fmt.Sprintf("Error: %s is defined in %s, not %s.", p.RuleID, doc.Name, p.Doc), true)
+		}
+		p.Doc = doc.Name
+		cur := *r
+		p.Current = &cur
 	}
 
 	path, err := rivetctx.CreateIntentProposal(s.intentDir, p)
 	if err != nil {
 		return s.textResult(req, "Error: "+err.Error(), true)
 	}
+	name := strings.TrimSuffix(filepath.Base(path), ".md")
 	if rel, err := filepath.Rel(s.intentRoot, path); err == nil {
 		path = rel
 	}
-	msg := fmt.Sprintf("Filed proposal at %s.\n\nThis changes NOTHING: the current rules still apply, and code must keep meeting them until a person edits .rivet/intent/. "+
-		"Tell the user a rule-change proposal is waiting for them (they can list them with 'rivet intent proposals').", filepath.ToSlash(path))
+
+	created := ""
+	if p.Change == rivetctx.ProposeAdd {
+		known := false
+		for _, d := range s.intents {
+			known = known || d.Name == p.Doc
+		}
+		if !known {
+			created = fmt.Sprintf(" Approving it creates %s.", p.Doc)
+		}
+	}
+	msg := fmt.Sprintf("Drafted proposal to %s %s in %s at %s.%s\n\n"+
+		"It is NOT a rule yet: nothing changes, and the code must keep meeting the current rules, until a person approves it. "+
+		"Tell the user it is waiting and give them these commands to run in their own terminal:\n\n"+
+		"  rivet intent review %s     # see the exact change to the doc\n"+
+		"  rivet intent approve %s    # apply it (interactive — a person confirms)\n"+
+		"  rivet intent reject %s --reason \"...\"\n\n"+
+		"Never run approve yourself. Once it is approved, mark the code and tests that enforce %s with rivet:intent comments.",
+		p.Change, p.RuleID, p.Doc, filepath.ToSlash(path), created, name, name, name, p.RuleID)
 	return s.textResult(req, msg, false)
 }
 

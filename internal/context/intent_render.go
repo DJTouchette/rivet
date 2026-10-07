@@ -12,7 +12,7 @@ import (
 // whole point of the tier: these are requirements, and the agent does not get
 // to decide they are wrong.
 const IntentPreamble = "These are business rules, ratified by people — requirements the code must meet, not descriptions of what it does. " +
-	"If a change would break one, stop and ask the user. If you think a rule is wrong, file it with rivet.intent-propose; never edit .rivet/intent/ yourself."
+	"If a change would break one, stop and ask the user. To add, change or retire a rule, draft it with rivet.intent-propose for the user to approve; never edit .rivet/intent/ yourself."
 
 // maxRulesPerDoc caps how many rules a summary lists per doc before pointing
 // at rivet.intent for the rest.

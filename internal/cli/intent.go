@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/djtouchette/rivet/internal/config"
 	rivetctx "github.com/djtouchette/rivet/internal/context"
@@ -52,6 +56,7 @@ func lintIntent(intents, contexts []*rivetctx.Document) rivetctx.IntentReport {
 	}
 	rep := rivetctx.CheckIntentInTree(intents, ".", intentScanOptions())
 	rep.Warnings = append(perDoc, rep.Warnings...)
+	rep.Warnings = append(rep.Warnings, rivetctx.ProposalWarnings(rivetctx.IntentDir)...)
 	return rep
 }
 
@@ -81,7 +86,11 @@ defect) or ## Policies (a business decision that may change):
 Code and tests point at the rule they enforce with a marker comment in any
 language: "// rivet:intent <ID>", e.g. with BIL-001 as the ID. 'rivet intent check' fails when an
 invariant has no marker, a marker names an unknown or retired rule, or two
-rules share an ID — run it in CI.`,
+rules share an ID — run it in CI.
+
+Agents can write rules under your supervision: they draft a complete change
+with the rivet.intent-propose tool, you read it with 'rivet intent review',
+and only 'rivet intent approve' — run by a person at a terminal — applies it.`,
 	}
 	cmd.AddCommand(
 		newIntentListCmd(),
@@ -91,6 +100,9 @@ rules share an ID — run it in CI.`,
 		newIntentAffectedCmd(),
 		newIntentScaffoldCmd(),
 		newIntentProposalsCmd(),
+		newIntentReviewCmd(),
+		newIntentApproveCmd(),
+		newIntentRejectCmd(),
 	)
 	return cmd
 }
@@ -211,7 +223,8 @@ Warnings (exit non-zero only with --strict):
   unenforced-policy, pending-enforcement, untested-invariant,
   missing-rationale, manual-without-reason, invalid-enforcement,
   rule-outside-section, missing-owner, missing-ratification,
-  stale-ratification, missing-tags, missing-related-paths, unknown-domain
+  stale-ratification, missing-tags, missing-related-paths, unknown-domain,
+  open-proposal (an agent-drafted rule change nobody has approved or rejected)
 
 An invariant enforced outside the code can declare it with
 "enforced: manual — <how>"; a known gap with "enforced: pending", which
@@ -391,7 +404,7 @@ func newIntentScaffoldCmd() *cobra.Command {
 				return fmt.Errorf("name must be a single path segment, e.g. billing")
 			}
 			if prefix == "" {
-				prefix = defaultRulePrefix(name)
+				prefix = rivetctx.DefaultRulePrefix(name)
 			}
 			if !rivetctx.IsRuleID(prefix + "-1") {
 				return fmt.Errorf("prefix %q must be uppercase letters/digits starting with a letter, e.g. BIL", prefix)
@@ -428,22 +441,6 @@ func newIntentScaffoldCmd() *cobra.Command {
 	cmd.Flags().StringVar(&prefix, "prefix", "", "rule ID prefix (default: first three letters of the name)")
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing doc")
 	return cmd
-}
-
-func defaultRulePrefix(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToUpper(name) {
-		if (r >= 'A' && r <= 'Z') || (b.Len() > 0 && r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-		if b.Len() == 3 {
-			break
-		}
-	}
-	if b.Len() == 0 {
-		return "RULE"
-	}
-	return b.String()
 }
 
 func intentTemplate(name, prefix string, crossCutting, hasDomainDoc bool) string {
@@ -483,11 +480,16 @@ func newIntentProposalsCmd() *cobra.Command {
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "proposals",
-		Short: "List agent-filed rule changes awaiting a person",
-		Long: `Agents never edit .rivet/intent/. When one thinks a rule is wrong, missing, or
-obsolete it files a proposal with the rivet.intent-propose tool, which lands in
-.rivet/intent/proposals/. Nothing there is loaded as intent. Review each one,
-edit the intent doc yourself if you agree, and delete the proposal.`,
+		Short: "List agent-drafted rule changes awaiting a person",
+		Long: `Agents never edit .rivet/intent/ directly. They draft rule changes with the
+rivet.intent-propose tool, which writes a complete, ready-to-apply proposal to
+.rivet/intent/proposals/. Nothing there is loaded as intent.
+
+  rivet intent review <name>    see the exact change to the doc
+  rivet intent approve <name>   apply it (interactive; a person confirms)
+  rivet intent reject <name>    archive it with a reason
+
+Decided proposals are kept in proposals/archive/ with who decided and when.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			props, err := rivetctx.ListIntentProposals(rivetctx.IntentDir)
 			if err != nil {
@@ -504,16 +506,201 @@ edit the intent doc yourself if you agree, and delete the proposal.`,
 				return nil
 			}
 			for _, p := range props {
-				rule := p.RuleID
-				if rule == "" {
-					rule = "(new)"
+				summary := p.Reason
+				if p.Rule != nil {
+					summary = p.Rule.Statement
 				}
-				fmt.Printf("%s  %-7s %-8s %-20s %s\n", p.Date, p.Change, rule, p.Doc, p.Path)
+				fmt.Printf("%s  %s %s in %s\n", p.Name, p.Change, p.RuleID, p.Doc)
+				fmt.Printf("    %s\n", truncate(summary, 100))
+				if p.Author != "" || p.Date != "" {
+					fmt.Printf("    drafted %s %s\n", p.Date, strings.TrimSpace("by "+p.Author))
+				}
 			}
+			fmt.Println("\nReview one with 'rivet intent review <name>'.")
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
+	return cmd
+}
+
+func truncate(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len([]rune(s)) > n {
+		return string([]rune(s)[:n-1]) + "…"
+	}
+	return s
+}
+
+// planProposal loads the current intent docs and a proposal, and computes
+// the edit approving it would make.
+func planProposal(ref string) (*rivetctx.ProposalPlan, error) {
+	path, err := rivetctx.ResolveIntentProposal(rivetctx.IntentDir, ref)
+	if err != nil {
+		return nil, err
+	}
+	p, err := rivetctx.LoadIntentProposal(path)
+	if err != nil {
+		return nil, err
+	}
+	intents, _, err := loadIntentDocs()
+	if err != nil {
+		return nil, err
+	}
+	return rivetctx.PlanProposal(".", intents, p, time.Now())
+}
+
+// describePlan writes what a proposal does and the diff it makes.
+func describePlan(w io.Writer, plan *rivetctx.ProposalPlan) {
+	p := plan.Proposal
+	fmt.Fprintf(w, "Proposal %s\n", p.Name)
+	fmt.Fprintf(w, "  %s %s in %s", p.Change, plan.RuleID, plan.DocName)
+	if p.Rule != nil && p.Change != rivetctx.ProposeRetire {
+		fmt.Fprintf(w, " (%s)", p.Rule.Class)
+	}
+	fmt.Fprintln(w)
+	if p.Author != "" || p.Date != "" {
+		fmt.Fprintf(w, "  drafted %s %s\n", p.Date, strings.TrimSpace("by "+p.Author))
+	}
+	if plan.Renumbered {
+		fmt.Fprintf(w, "  note: %s was taken after this was drafted, so it will be added as %s\n", p.RuleID, plan.RuleID)
+	}
+	if p.Evidence != "" {
+		fmt.Fprintf(w, "  evidence: %s\n", truncate(p.Evidence, 200))
+	}
+	rel := plan.DocPath
+	if r, err := filepath.Rel(".", plan.DocPath); err == nil {
+		rel = r
+	}
+	if plan.Created {
+		fmt.Fprintf(w, "\nCreates %s:\n\n", filepath.ToSlash(rel))
+	} else {
+		fmt.Fprintf(w, "\nChanges %s:\n\n", filepath.ToSlash(rel))
+	}
+	fmt.Fprint(w, rivetctx.LineDiff(plan.Before, plan.After))
+}
+
+func newIntentReviewCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "review <proposal>",
+		Short: "Show the exact change an agent-drafted proposal makes to the intent doc",
+		Long: `Show a proposal and the diff approving it would make. To change the wording,
+edit the proposal file itself — approve applies whatever it says when you run it.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			plan, err := planProposal(args[0])
+			if err != nil {
+				return err
+			}
+			describePlan(os.Stdout, plan)
+			fmt.Printf("\nProposal file: %s\n", plan.Proposal.Path)
+			fmt.Printf("Approve with 'rivet intent approve %s', or reject with 'rivet intent reject %s --reason ...'.\n", plan.Proposal.Name, plan.Proposal.Name)
+			return nil
+		},
+	}
+}
+
+// stdinIsTerminal reports whether stdin is an interactive terminal. Agents
+// run commands through non-interactive shells, so this is what keeps an agent
+// from approving its own proposal.
+var stdinIsTerminal = func() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// confirmApproval shows the plan and asks the person to type the rule ID.
+// Typing the ID, rather than y, makes approving the wrong proposal by habit
+// unlikely.
+func confirmApproval(in io.Reader, out io.Writer, plan *rivetctx.ProposalPlan) bool {
+	describePlan(out, plan)
+	fmt.Fprintf(out, "\nThis makes %s a ratified business rule that CI holds the code to.\n", plan.RuleID)
+	fmt.Fprintf(out, "Type %s to approve, anything else to cancel: ", plan.RuleID)
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && line == "" {
+		return false
+	}
+	return strings.TrimSpace(line) == plan.RuleID
+}
+
+// approverName is who gets recorded as approving: the git identity, else the
+// OS user.
+func approverName() string {
+	if out, err := exec.Command("git", "config", "user.name").Output(); err == nil {
+		if name := strings.TrimSpace(string(out)); name != "" {
+			if email, err := exec.Command("git", "config", "user.email").Output(); err == nil && strings.TrimSpace(string(email)) != "" {
+				return name + " <" + strings.TrimSpace(string(email)) + ">"
+			}
+			return name
+		}
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return os.Getenv("USERNAME")
+}
+
+func newIntentApproveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "approve <proposal>",
+		Short: "Apply an agent-drafted rule change — a person, at a terminal",
+		Long: `Apply a proposal to its intent doc after you confirm it. Shows the diff, asks
+you to type the rule ID, then writes the doc, sets last_ratified to today, and
+archives the proposal in proposals/archive/ with your name.
+
+Approval only works in an interactive terminal: agents run commands
+non-interactively, so they can draft rules but cannot ratify them. Approval
+also refuses a proposal drafted against a rule that has changed since.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// rivet:intent CTX-004
+			if !stdinIsTerminal() {
+				cmd.SilenceUsage = true
+				return fmt.Errorf("rivet intent approve must be run by a person in an interactive terminal — " +
+					"agents can draft rules with rivet.intent-propose, but ratifying one is a person's decision")
+			}
+			plan, err := planProposal(args[0])
+			if err != nil {
+				return err
+			}
+			if !confirmApproval(os.Stdin, os.Stdout, plan) {
+				fmt.Println("Not approved; nothing changed.")
+				return nil
+			}
+			approver := approverName()
+			if err := rivetctx.ApplyProposalPlan(plan, approver, time.Now()); err != nil {
+				return err
+			}
+			fmt.Printf("\nApproved by %s: %s %s in %s.\n", approver, plan.Proposal.Change, plan.RuleID, plan.DocName)
+			if plan.Proposal.Change != rivetctx.ProposeRetire {
+				fmt.Printf("Next: mark the code and tests that enforce it with rivet:intent comments naming %s — 'rivet intent check' fails on an unmarked invariant.\n", plan.RuleID)
+			} else {
+				fmt.Printf("Next: remove the rivet:intent markers naming %s — 'rivet intent check' fails while code still points at a retired rule.\n", plan.RuleID)
+			}
+			return nil
+		},
+	}
+}
+
+func newIntentRejectCmd() *cobra.Command {
+	var reason string
+	cmd := &cobra.Command{
+		Use:   "reject <proposal>",
+		Short: "Archive an agent-drafted rule change without applying it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := rivetctx.ResolveIntentProposal(rivetctx.IntentDir, args[0])
+			if err != nil {
+				return err
+			}
+			dest, err := rivetctx.RejectIntentProposal(path, approverName(), reason, time.Now())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Rejected; archived at %s. No rules changed.\n", dest)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&reason, "reason", "", "why it was rejected (required)")
 	return cmd
 }
 

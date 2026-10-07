@@ -66,7 +66,8 @@ func GenerateInstructions(p provider.Provider, caps []capabilities.Capability, d
 	b.WriteString("`.rivet/intent/` holds the business rules the code must keep, ratified by people. ")
 	b.WriteString("They are requirements, not descriptions: when the code and a rule disagree, the code is wrong unless a person says the rule changed.\n\n")
 	b.WriteString("- Before changing business logic, call **`rivet.intent`** with the `path` of each file you will touch.\n")
-	b.WriteString("- If your change would break a rule, stop and ask the user. Never edit `.rivet/intent/` yourself — file **`rivet.intent-propose`** and tell the user it is waiting.\n")
+	b.WriteString("- If your change would break a rule, stop and ask the user.\n")
+	b.WriteString("- You may write rules, under supervision: when the user asks for a rule, or you find one the code depends on that isn't written down, draft it with **`rivet.intent-propose`** (add, amend or retire, with the business reason). Never edit `.rivet/intent/` directly and never run `rivet intent approve` — give the user the review and approve commands from the tool's reply; the rule takes effect only when they approve it.\n")
 	b.WriteString("- Code that enforces a rule carries a `rivet:intent <ID>` comment, and so does the test that proves it. Add both when you implement a rule; keep them when you move code.\n")
 	b.WriteString("- Before reporting done, call **`rivet.intent`** with `{\"changes\": true}` and run the tests it lists alongside witness's selection.\n\n")
 

@@ -47,6 +47,11 @@ cannot tell. --output overrides the path and writes a single file.`,
 				fmt.Printf("warning: loading context: %v\n", err)
 				docs = nil
 			}
+			if intents, err := rivetctx.LoadIntent("."); err != nil {
+				fmt.Printf("warning: loading intent: %v\n", err)
+			} else {
+				docs = append(docs, intents...)
+			}
 
 			// --output names one file, so it only makes sense for one
 			// provider. Naming both would silently write the same path twice.

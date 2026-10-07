@@ -1,7 +1,7 @@
 ---
-tags: [context, retrieval, recommend, learnings, wiki, runbooks, embeddings, curated, weighting, scoring]
+tags: [context, retrieval, recommend, learnings, wiki, runbooks, embeddings, curated, weighting, scoring, intent, rules, markers]
 owner: djtouchette
-last_reviewed: 2026-07-24
+last_reviewed: 2026-10-07
 related_paths:
   - "internal/context/**"
 ---
@@ -21,7 +21,7 @@ Source: `internal/context/` (37 files)
 
 ## Overview
 
-The knowledge layer — the reason rivet exists. Four document tiers feed one
+The knowledge layer — the reason rivet exists. Five document tiers feed one
 retrieval engine, all reduced to the same `Document` type distinguished by
 `Kind`:
 
@@ -33,6 +33,14 @@ retrieval engine, all reduced to the same `Document` type distinguished by
    Down-weighted so it augments rather than outranks code-adjacent context.
 4. **Runbooks** (`.rivet/runbooks/`) — trigger-keyed procedures, reached
    deliberately by symptom through their own tool rather than by ranking.
+
+5. **Intent** (`.rivet/intent/`) — the prescriptive tier: business rules with
+   stable IDs (BIL-001) that the code is judged against, not descriptions of
+   it. Kept out of the ranked pool and shown in their own section, first.
+   Held against `rivet:intent` marker comments in code and tests by
+   `CheckIntent`, which `context lint` runs, so CI fails on an unmarked
+   invariant or a marker naming an unknown or retired rule. See [[intent/context]]
+   for the rules this tier itself must keep.
 
 Separately, the **learning log** (`.rivet/learnings/*.md`) is capture, not
 retrieval: one file per entry, `promoted: false` until a human-reviewed
@@ -47,6 +55,11 @@ promotion pass folds it into a curated doc.
 - `semantic/` — embedding backends (onnx/ollama/openai) and the committable vector cache
 - `lint.go` — staleness and quality checks, incl. runbook `last_tested`
 - `links.go` — `[[wikilink]]` extraction, resolution and rendering
+- `intent.go` — `LoadIntent`, `ParseRules` (section decides class), `LinkIntentDomains`, `governsPath`
+- `intent_refs.go` — marker scan via `git grep` (worktree, index, or a rev); `IsTestFile`
+- `intent_check.go` — `CheckIntent` coverage and the per-doc intent lint rules
+- `intent_affected.go` — `Affected`: rules a diff touches, marker add/remove, rule-text diffs
+- `intent_propose.go` — agent proposals, written where `LoadIntent` never reads
 
 ## Failure modes
 
@@ -90,5 +103,16 @@ promotion pass folds it into a curated doc.
   missing lib directory *is* stale) or a first segment that's a real directory.
   Dot-directories are excluded: docs legitimately mention `.rivet/embeddings/`
   before anything creates it.
+- **Intent markers are found by `git grep`, not recon.** Untracked files count,
+  gitignored ones don't, and markdown never does — a README mentioning a rule
+  documents it, it doesn't enforce it. Outside git it falls back to a walk.
+  Rivet's own source must never contain a literal marker followed by an ID
+  (tests build it as `"rivet:" + "intent"`), or its CI flags a reference to a
+  rule rivet doesn't define. `testdata/` is excluded by default for the same reason.
+- **A scan failure is an error, not an empty result.** `CheckIntentInTree`
+  reports `intent-scan-failed` rather than "no markers", which would fail every
+  invariant for the wrong reason — or, for a project with only policies, pass.
+- Intent docs are named `intent/<file>` so they never collide with the domain
+  doc they govern, and inherit its `related_paths` when they declare none.
 - Lint exits non-zero on errors, or on anything with `--strict`. CI runs
   `--strict` against this repo's own docs, so a broken link fails the build.

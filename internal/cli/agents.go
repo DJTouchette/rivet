@@ -63,7 +63,7 @@ const rivetExplorerAgent = `---
 name: rivet-explorer
 description: Investigate unfamiliar code with a context-first, strictly read-only workflow. Use proactively for exploration, impact analysis, dependency tracing, and “where does this live / what touches this?” questions before editing an area you do not yet understand.
 model: haiku
-tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
+tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__rivet_intent, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
 ---
 
 You are Rivet Explorer, a strictly read-only investigation agent for Claude Code.
@@ -79,6 +79,7 @@ Do not edit files, write docs, run formatters, make commits, or propose patches.
 2. Context first.
 Before using recon heavily, call ` + "`rivet.context-recommend`" + ` with the task description and read the top relevant docs with ` + "`rivet.context-show`" + `.
 If the answer is already in context, say so directly and avoid redundant recon work.
+When the area holds business logic, call ` + "`rivet.intent`" + ` with the ` + "`path`" + ` of each core file: those are the ratified business rules the code must keep. Report the rules that apply as requirements, not as observations.
 
 3. Start broad, then narrow.
 Use this investigation sequence unless the task already names an exact file:
@@ -116,7 +117,7 @@ const rivetInvestigatorAgent = `---
 name: rivet-investigator
 description: Investigate unfamiliar code with a context-first workflow and record reusable findings back into Rivet context docs when warranted. Use when exploration is likely to uncover durable project knowledge worth saving.
 model: sonnet
-tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__rivet_learn, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
+tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__rivet_intent, mcp__rivet__rivet_learn, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
 ---
 
 You are Rivet Investigator, a mostly read-only investigation agent for Claude Code.
@@ -132,6 +133,7 @@ Do not modify source files, run formatters, or make commits. Your only allowed w
 2. Context first.
 Before using recon heavily, call ` + "`rivet.context-recommend`" + ` with the task description and read the top relevant docs with ` + "`rivet.context-show`" + `.
 If the answer is already in context, say so directly and avoid redundant recon work.
+When the area holds business logic, call ` + "`rivet.intent`" + ` with the ` + "`path`" + ` of each core file: those are the ratified business rules the code must keep. Report the rules that apply as requirements, not as observations.
 
 3. Start broad, then narrow.
 Use this investigation sequence unless the task already names an exact file:

@@ -13,6 +13,7 @@ import (
 type Config struct {
 	ProjectCLI   ProjectCLIConfig `yaml:"project_cli,omitempty"`
 	Context      ContextConfig    `yaml:"context,omitempty"`
+	Intent       IntentConfig     `yaml:"intent,omitempty"`
 	Tools        ToolsConfig      `yaml:"tools,omitempty"`
 	Capabilities []CapabilityDef  `yaml:"capabilities,omitempty"`
 	Policies     []PolicyDef      `yaml:"policies,omitempty"`
@@ -34,6 +35,16 @@ type ContextConfig struct {
 	// Azure DevOps wiki or an existing docs/ tree. The team is responsible for
 	// keeping those checkouts current; rivet only reads the markdown.
 	WikiPaths []string `yaml:"wiki_paths,omitempty"`
+}
+
+// IntentConfig controls how intent docs (.rivet/intent/) are checked against
+// the code.
+type IntentConfig struct {
+	// Exclude are globs (relative to the project root) never scanned for
+	// rivet:intent markers, on top of the built-in .rivet/**, **/testdata/**,
+	// **/node_modules/** and **/vendor/**. Use it for generated or vendored
+	// code that copies markers it doesn't own.
+	Exclude []string `yaml:"exclude,omitempty"`
 }
 
 // ShouldAutoCompact returns whether auto-compaction nudges are enabled.
@@ -302,6 +313,15 @@ func StarterConfigYAML() []byte {
 #   wiki_paths:
 #     - "../project.wiki/**"
 #     - "docs/**"
+
+# Intent — business rules in .rivet/intent/, checked against rivet:intent
+# markers in the code by 'rivet intent check' and 'rivet context lint'.
+# exclude: extra globs never scanned for markers (generated or vendored code).
+#          .rivet/**, **/testdata/**, **/node_modules/** and **/vendor/** are
+#          always skipped.
+# intent:
+#   exclude:
+#     - "generated/**"
 
 # Tools — which built-in tool groups Rivet exposes over MCP.
 # recon.* and witness.* are always on. schema.* and vaulty.* are registered only

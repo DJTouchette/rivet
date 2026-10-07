@@ -135,6 +135,12 @@ func lintDoc(doc *Document, projectRoot string, knownNames map[string]int) []Lin
 			add(SeverityWarning, "stale-test",
 				fmt.Sprintf("last tested %d days ago (threshold: %d) — re-test and update last_tested", age, StaleTestDays))
 		}
+	case KindIntent:
+		// Intent is prescriptive and ratified by a person, so its frontmatter
+		// asks for a ratification date rather than a review date, and its body
+		// must actually contain rules. Coverage against the code is checked
+		// corpus-wide by CheckIntent.
+		lintIntentDoc(doc, knownNames, add)
 	case KindWiki:
 		// Wiki is free-form (often imported); only flag genuinely broken content.
 	case KindCode:
@@ -200,7 +206,11 @@ func lintDoc(doc *Document, projectRoot string, knownNames map[string]int) []Lin
 	}
 
 	// Rule: stale-related-path — related_paths that match nothing on disk.
+	// Paths an intent doc inherited are its domain doc's, linted there.
 	for _, pattern := range doc.RelatedPaths {
+		if doc.InheritedPaths {
+			break
+		}
 		if !globMatchesAnything(pattern, projectRoot) {
 			add(SeverityWarning, "stale-related-path",
 				fmt.Sprintf("related_path %q matches no files on disk", pattern))

@@ -1,0 +1,8 @@
+# Fixture for the intent harness. Detected tool groups are pinned off so the
+# capability list doesn't depend on the machine running the test.
+tools:
+  schema: false
+  vaulty: false
+intent:
+  exclude:
+    - "generated/**"

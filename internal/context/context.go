@@ -19,6 +19,7 @@ const (
 	KindWiki     Kind = "wiki"    // free-form reference / narrative docs
 	KindRunbook  Kind = "runbook" // actionable, trigger-keyed procedures
 	KindCode     Kind = "code"    // docs extracted from rivet:context code comments / .context/ sidecars
+	KindIntent   Kind = "intent"  // prescriptive business rules the code is judged against
 )
 
 // IsContextKind reports whether a kind is one of the curated, code-adjacent
@@ -45,6 +46,16 @@ type Document struct {
 	Triggers   []string  // symptoms/alerts that invoke this runbook (retrieval keys)
 	Severity   string    // low | medium | high | critical
 	LastTested time.Time // from frontmatter: last_tested (YYYY-MM-DD)
+
+	// Intent-specific fields (empty/zero for other kinds).
+	Scope        IntentScope // domain | cross-cutting
+	Prefix       string      // from frontmatter: prefix — every rule ID in the doc must start with it
+	Domain       string      // from frontmatter: domain — the curated domain doc this intent governs
+	LastRatified time.Time   // from frontmatter: last_ratified (YYYY-MM-DD)
+	Rules        []Rule      // parsed from the body's Invariants / Policies / Retired sections
+	// InheritedPaths is true when RelatedPaths were copied from the linked
+	// domain doc rather than declared in the intent doc's own frontmatter.
+	InheritedPaths bool
 }
 
 // URI returns the MCP resource URI for this document. Wiki and runbook docs get
@@ -57,6 +68,8 @@ func (d *Document) URI() string {
 		return "rivet://runbook/" + d.Name
 	case KindCode:
 		return "rivet://code/" + d.Name
+	case KindIntent:
+		return "rivet://" + d.Name
 	default:
 		return fmt.Sprintf("rivet://context/%ss/%s", d.Kind, d.Name)
 	}
@@ -175,6 +188,9 @@ type frontmatter struct {
 	triggers     []string // runbook: symptoms/alerts
 	severity     string   // runbook: low|medium|high|critical
 	lastTested   string   // runbook: YYYY-MM-DD
+	prefix       string   // intent: rule ID prefix
+	domain       string   // intent: governed domain doc
+	lastRatified string   // intent: YYYY-MM-DD
 }
 
 // parseFrontmatter extracts YAML frontmatter from markdown content.
@@ -272,6 +288,12 @@ func parseFrontmatter(raw string) (frontmatter, string) {
 			fm.severity = valPart
 		case "last_tested":
 			fm.lastTested = valPart
+		case "prefix":
+			fm.prefix = valPart
+		case "domain":
+			fm.domain = valPart
+		case "last_ratified":
+			fm.lastRatified = valPart
 		}
 	}
 

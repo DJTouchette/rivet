@@ -79,6 +79,14 @@ Configure Claude Code to use this server by adding to your MCP settings:
 			srv.SetRunbooks(runbooks)
 			srv.SetCodeDocs(codeDocs)
 
+			intents, err := rivetctx.LoadIntent(".")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: loading intent: %v\n", err)
+				intents = nil
+			}
+			rivetctx.LinkIntentDomains(intents, contexts)
+			srv.SetIntent(intents, ".", rivetctx.ScanOptions{Exclude: cfg.Intent.Exclude})
+
 			// Optional embedding-based recommend signal. Disabled unless
 			// RIVET_EMBED_BACKEND is set; failures degrade to lexical-only.
 			if scorer, err := semantic.OpenScorer(cmd.Context(), semantic.ConfigFromEnv(), semantic.DefaultStoreDir); err != nil {

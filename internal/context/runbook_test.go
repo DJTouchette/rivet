@@ -63,6 +63,7 @@ func TestScoreTriggerMatch(t *testing.T) {
 	}
 }
 
+// rivet:intent CTX-001
 func TestCreateAndPromoteRunbookDraft(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "runbooks")
 

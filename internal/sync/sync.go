@@ -61,6 +61,15 @@ func GenerateInstructions(p provider.Provider, caps []capabilities.Capability, d
 	b.WriteString("6. **`witness.select`** on the files you changed — know which tests to run before committing\n")
 	b.WriteString("7. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.\n\n")
 
+	// Business rules: the prescriptive tier.
+	b.WriteString("### Business rules (intent)\n\n")
+	b.WriteString("`.rivet/intent/` holds the business rules the code must keep, ratified by people. ")
+	b.WriteString("They are requirements, not descriptions: when the code and a rule disagree, the code is wrong unless a person says the rule changed.\n\n")
+	b.WriteString("- Before changing business logic, call **`rivet.intent`** with the `path` of each file you will touch.\n")
+	b.WriteString("- If your change would break a rule, stop and ask the user. Never edit `.rivet/intent/` yourself — file **`rivet.intent-propose`** and tell the user it is waiting.\n")
+	b.WriteString("- Code that enforces a rule carries a `rivet:intent <ID>` comment, and so does the test that proves it. Add both when you implement a rule; keep them when you move code.\n")
+	b.WriteString("- Before reporting done, call **`rivet.intent`** with `{\"changes\": true}` and run the tests it lists alongside witness's selection.\n\n")
+
 	// Promote ad-hoc operations to project CLI.
 	b.WriteString("### Reusable operations\n\n")
 	b.WriteString("If you find yourself writing a raw SQL query, a one-off script, or an ad-hoc shell command to answer a recurring question, ")
@@ -99,6 +108,8 @@ func GenerateInstructions(p provider.Provider, caps []capabilities.Capability, d
 	b.WriteString("|------|------|---------|\n")
 	b.WriteString("| `rivet.context-recommend` | `{\"query\": \"...\"}` | `{\"query\": \"how does billing work\"}` |\n")
 	b.WriteString("| `rivet.context-show` | `{\"name\": \"...\"}` | `{\"name\": \"billing\"}` |\n")
+	b.WriteString("| `rivet.intent` | `{\"path\": \"...\"}`, `{\"id\": \"...\"}` or `{\"changes\": true}` | `{\"path\": \"lib/app/billing/invoice.ex\"}`, `{\"id\": \"BIL-001\"}` |\n")
+	b.WriteString("| `rivet.intent-propose` | `{\"change\": \"amend\", \"rule_id\": \"...\", \"statement\": \"...\", \"why\": \"...\"}` | `{\"change\": \"amend\", \"rule_id\": \"BIL-010\", \"statement\": \"Dunning starts 7 days after due\", \"why\": \"finance asked\"}` |\n")
 	b.WriteString("| `rivet.learn` | `{\"doc\": \"...\", \"learning\": \"...\"}` | `{\"doc\": \"billing\", \"learning\": \"AddTax does a 3-table join on every insert\"}` |\n")
 	b.WriteString("| `recon.grep` | `[\"pattern\"]` or `[\"pattern\", \"--type\", \"definition\"]` | `[\"SMS.send\"]`, `[\"Accounts.\", \"--type\", \"definition\"]` |\n")
 	b.WriteString("| `recon.search` | `[\"keyword\"]` | `[\"billing\"]`, `[\"twilio\"]` |\n")
@@ -172,6 +183,11 @@ func writeContext(b *strings.Builder, docs []*rivetctx.Document) {
 		b.WriteString("**Paradigms:** ")
 		b.WriteString(docNames(paradigms))
 		b.WriteString("\n\n")
+	}
+	if intents := filterByKind(docs, rivetctx.KindIntent); len(intents) > 0 {
+		b.WriteString("**Business rules (intent):** ")
+		b.WriteString(docNames(intents))
+		b.WriteString(" — see `rivet.intent`\n\n")
 	}
 }
 

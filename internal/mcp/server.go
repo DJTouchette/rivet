@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"path/filepath"
 	"strings"
 
 	"github.com/djtouchette/rivet/internal/capabilities"
@@ -188,6 +189,10 @@ type Server struct {
 	wiki         []*rivetctx.Document // free-form reference docs (KindWiki)
 	runbooks     []*rivetctx.Document // actionable procedures (KindRunbook)
 	code         []*rivetctx.Document // docs extracted from code comments / .context/ sidecars (KindCode)
+	intents      []*rivetctx.Document // business rules (KindIntent), shown apart from descriptive docs
+	intentRoot   string               // project root scanned for rivet:intent markers
+	intentOpts   rivetctx.ScanOptions // marker scan excludes
+	intentDir    string               // where rivet.intent-propose files proposals
 	pins         *pins.Registry
 	policies     []policy.Rule
 	version      string
@@ -214,8 +219,21 @@ func NewServer(reg *capabilities.Registry, exec *capabilities.Executor, contexts
 		version:      version,
 		autoCompact:  autoCompact,
 		learningsDir: defaultLearningsDir,
+		intentRoot:   ".",
+		intentDir:    rivetctx.IntentDir,
 		logger:       log.New(io.Discard, "", 0),
 	}
+}
+
+// SetIntent attaches business-rule docs (KindIntent). root is the project
+// root the server scans for rivet:intent markers on demand — on demand, so a
+// marker an agent adds mid-session is seen by its next call. Proposals are
+// filed under root/.rivet/intent/proposals/.
+func (s *Server) SetIntent(docs []*rivetctx.Document, root string, opts rivetctx.ScanOptions) {
+	s.intents = docs
+	s.intentRoot = root
+	s.intentOpts = opts
+	s.intentDir = filepath.Join(root, rivetctx.IntentDir)
 }
 
 // SetLearningsDir overrides the directory where rivet.learn writes entries.
@@ -497,6 +515,83 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		Tool{
+			Name: "rivet.intent",
+			Description: "[safe] Business rules (intent) the code must keep — ratified by people, so they are requirements, not descriptions. " +
+				"Call BEFORE changing business logic. Give exactly one of: 'path' (rules governing a file and markers in it), 'id' (one rule, e.g. 'BIL-001', with the code and tests enforcing it), " +
+				"'query' (rules relevant to a task), or 'changes'/'since'/'staged' (rules your change touches and the tests that verify them — run those tests). No arguments lists every intent doc. " +
+				"If a change would break a rule, stop and ask the user; never edit .rivet/intent/ — use rivet.intent-propose.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"path": map[string]interface{}{
+						"type":        "string",
+						"description": "A file path relative to the project root (e.g. 'services/billing/invoice.go').",
+					},
+					"id": map[string]interface{}{
+						"type":        "string",
+						"description": "A rule ID (e.g. 'BIL-001').",
+					},
+					"query": map[string]interface{}{
+						"type":        "string",
+						"description": "A task description or keywords (e.g. 'refund an issued invoice').",
+					},
+					"changes": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Analyse the working tree (staged, unstaged, untracked) against HEAD.",
+					},
+					"since": map[string]interface{}{
+						"type":        "string",
+						"description": "Analyse every change since this git ref's merge-base with HEAD (e.g. 'main').",
+					},
+					"staged": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Analyse staged changes only.",
+					},
+				},
+			},
+		},
+		Tool{
+			Name: "rivet.intent-propose",
+			Description: "[guarded] Propose adding, amending, or retiring a business rule. Writes to .rivet/intent/proposals/ for a PERSON to decide — " +
+				"it changes nothing: rules are never edited by agents, and the code must keep meeting the current rule until a person updates it. " +
+				"Use when the user tells you a rule changed, when code and a rule conflict and the rule looks wrong, or when you find an unwritten rule the code clearly depends on. Then tell the user a proposal is waiting.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"change": map[string]interface{}{
+						"type":        "string",
+						"enum":        []string{rivetctx.ProposeAdd, rivetctx.ProposeAmend, rivetctx.ProposeRetire},
+						"description": "add | amend | retire",
+					},
+					"doc": map[string]interface{}{
+						"type":        "string",
+						"description": "Intent doc the change targets (e.g. 'intent/billing'). For amend/retire it defaults to the doc defining rule_id.",
+					},
+					"rule_id": map[string]interface{}{
+						"type":        "string",
+						"description": "The rule to amend or retire (e.g. 'BIL-010'). Omit for add — a person assigns the new ID.",
+					},
+					"statement": map[string]interface{}{
+						"type":        "string",
+						"description": "The proposed rule text (required for add and amend).",
+					},
+					"why": map[string]interface{}{
+						"type":        "string",
+						"description": "The business reason for the change, and who asked for it if a person did.",
+					},
+					"evidence": map[string]interface{}{
+						"type":        "string",
+						"description": "What prompted it: the conflicting code (file:line), a ticket, the user's words (optional).",
+					},
+					"author": map[string]interface{}{
+						"type":        "string",
+						"description": "Who is proposing (optional).",
+					},
+				},
+				Required: []string{"change", "why"},
+			},
+		},
+		Tool{
 			Name:        "rally.pin",
 			Description: "[safe] Pin a rally ticket so it stays injected into chat context across turns. Use when starting work on a ticket the user has named.",
 			InputSchema: inputSchema{
@@ -577,6 +672,10 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "rivet.learn":
 		s.reconCallsSinceLearn = 0
 		return s.handleLearn(req, params.Arguments)
+	case "rivet.intent":
+		return s.handleIntent(req, params.Arguments)
+	case "rivet.intent-propose":
+		return s.handleIntentPropose(req, params.Arguments)
 	case "rally.pin":
 		id, _ := params.Arguments["id"].(string)
 		note, _ := params.Arguments["note"].(string)
@@ -632,6 +731,7 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 
 	// A missing witness payload is an unknown coverage result, never success.
 	// Keep this guard even when a dependency regresses its writer capture.
+	// rivet:intent FC-001
 	emptyWitness := strings.HasPrefix(params.Name, "witness.") && strings.TrimSpace(text) == ""
 	if emptyWitness {
 		text = "Witness returned no output; test coverage is unproven. Use witness.select to inspect the selection or run a verified project suite."
@@ -648,11 +748,18 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		}
 	}
 
+	content := []ContentItem{{Type: "text", Text: text}}
+	// Rule-aware test selection rides along with witness's own, in a separate
+	// content block so witness's JSON stays parseable on its own.
+	if note := s.witnessIntentNote(params.Name, args); note != "" {
+		content = append(content, ContentItem{Type: "text", Text: note})
+	}
+
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: ToolCallResult{
-			Content: []ContentItem{{Type: "text", Text: text}},
+			Content: content,
 			// A non-zero exit is a failed tool call and has to be flagged as one.
 			// Every in-process runner reserves non-zero for "the command did not
 			// do what you asked": witness exits 1 rather than print a test
@@ -673,6 +780,7 @@ func (s *Server) allDocs() []*rivetctx.Document {
 	all = append(all, s.wiki...)
 	all = append(all, s.runbooks...)
 	all = append(all, s.code...)
+	all = append(all, s.intents...)
 	return all
 }
 
@@ -767,7 +875,7 @@ func (s *Server) handleResourcesRead(req *Request) *Response {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleContextList(req *Request) *Response {
-	if len(s.contexts) == 0 {
+	if len(s.contexts) == 0 && len(s.intents) == 0 {
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -779,6 +887,12 @@ func (s *Server) handleContextList(req *Request) *Response {
 	fmt.Fprintf(&b, "%-25s %-12s %s\n", "NAME", "KIND", "TITLE")
 	for _, doc := range s.contexts {
 		fmt.Fprintf(&b, "%-25s %-12s %s\n", doc.Name, doc.Kind, doc.Title)
+	}
+	for _, doc := range s.intents {
+		fmt.Fprintf(&b, "%-25s %-12s %s\n", doc.Name, doc.Kind, doc.Title)
+	}
+	if len(s.intents) > 0 {
+		b.WriteString("\nintent docs are business rules — use rivet.intent to see which govern a file or a change.\n")
 	}
 
 	return &Response{
@@ -851,7 +965,11 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 	pool = append(pool, s.code...)
 	recs := rivetctx.Recommend(pool, query, 5, opts...)
 
-	if len(recs) == 0 {
+	// Business rules are listed first and apart: they constrain the change,
+	// where everything below only explains the code.
+	intentRecs := rivetctx.RecommendIntent(s.intents, query, 3, opts...)
+
+	if len(recs) == 0 && len(intentRecs) == 0 {
 		return &Response{
 			JSONRPC: "2.0",
 			ID:      req.ID,
@@ -860,7 +978,10 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Recommended context for %q:\n\n", query))
+	sb.WriteString(rivetctx.FormatIntentRecommendations(intentRecs))
+	if len(recs) > 0 {
+		sb.WriteString(fmt.Sprintf("Recommended context for %q:\n\n", query))
+	}
 	for _, r := range recs {
 		sb.WriteString(fmt.Sprintf("  %.2f  [%s] %s — %s\n", r.Score, r.Kind, r.Name, r.Title))
 		sb.WriteString(fmt.Sprintf("        signals: %s\n", strings.Join(r.Signals, ", ")))

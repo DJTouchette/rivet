@@ -34,6 +34,8 @@ Structured context is available via MCP resources or `rivet context show <name>`
 
 **Paradigms:** hotspots, stack
 
+**Business rules (intent):** intent/context, intent/fail-closed — see `rivet.intent`
+
 ## Rivet Rules
 
 Rivet is available as an MCP server. **Always check context docs before reaching for recon tools.**
@@ -61,6 +63,15 @@ Changes require understanding blast radius. Use the full recon sweep.
 5. **`recon.context`** on high-fan-in files to check risk metrics before modifying them
 6. **`witness.select`** on the files you changed — know which tests to run before committing
 7. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.
+
+### Business rules (intent)
+
+`.rivet/intent/` holds the business rules the code must keep, ratified by people. They are requirements, not descriptions: when the code and a rule disagree, the code is wrong unless a person says the rule changed.
+
+- Before changing business logic, call **`rivet.intent`** with the `path` of each file you will touch.
+- If your change would break a rule, stop and ask the user. Never edit `.rivet/intent/` yourself — file **`rivet.intent-propose`** and tell the user it is waiting.
+- Code that enforces a rule carries a `rivet:intent <ID>` comment, and so does the test that proves it. Add both when you implement a rule; keep them when you move code.
+- Before reporting done, call **`rivet.intent`** with `{"changes": true}` and run the tests it lists alongside witness's selection.
 
 ### Reusable operations
 
@@ -95,6 +106,8 @@ When a caveat applies, say so rather than reporting the number as settled, and r
 |------|------|---------|
 | `rivet.context-recommend` | `{"query": "..."}` | `{"query": "how does billing work"}` |
 | `rivet.context-show` | `{"name": "..."}` | `{"name": "billing"}` |
+| `rivet.intent` | `{"path": "..."}`, `{"id": "..."}` or `{"changes": true}` | `{"path": "lib/app/billing/invoice.ex"}`, `{"id": "BIL-001"}` |
+| `rivet.intent-propose` | `{"change": "amend", "rule_id": "...", "statement": "...", "why": "..."}` | `{"change": "amend", "rule_id": "BIL-010", "statement": "Dunning starts 7 days after due", "why": "finance asked"}` |
 | `rivet.learn` | `{"doc": "...", "learning": "..."}` | `{"doc": "billing", "learning": "AddTax does a 3-table join on every insert"}` |
 | `recon.grep` | `["pattern"]` or `["pattern", "--type", "definition"]` | `["SMS.send"]`, `["Accounts.", "--type", "definition"]` |
 | `recon.search` | `["keyword"]` | `["billing"]`, `["twilio"]` |

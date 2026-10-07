@@ -170,10 +170,10 @@ func TestToolsList(t *testing.T) {
 	var result toolsListResult
 	unmarshalResult(t, resp, &result)
 
-	// 6 rivet tools (context-list/show/recommend, runbook, learn, runbook-draft)
-	// + 2 rally pin tools + 2 registry capabilities = 10
-	if len(result.Tools) != 10 {
-		t.Fatalf("expected 10 tools, got %d", len(result.Tools))
+	// 8 rivet tools (context-list/show/recommend, runbook, learn, runbook-draft,
+	// intent, intent-propose) + 2 rally pin tools + 2 registry capabilities = 12
+	if len(result.Tools) != 12 {
+		t.Fatalf("expected 12 tools, got %d", len(result.Tools))
 	}
 
 	byName := map[string]Tool{}
@@ -187,6 +187,7 @@ func TestToolsList(t *testing.T) {
 	wantOrder := []string{
 		"rivet.context-list", "rivet.context-show", "rivet.context-recommend",
 		"rivet.runbook", "rivet.learn", "rivet.runbook-draft",
+		"rivet.intent", "rivet.intent-propose",
 		"rally.pin", "rally.unpin",
 		// Registry capabilities follow (sorted by name).
 		"danger-cmd", "echo-test",
@@ -1049,6 +1050,7 @@ func TestContextShowStillErrorsOnUnknownName(t *testing.T) {
 	}
 }
 
+// rivet:intent FC-001
 func TestWitnessEmptyPayloadIsUnproven(t *testing.T) {
 	reg := capabilities.NewRegistry()
 	reg.Register(capabilities.Capability{Name: "witness.run", Kind: capabilities.KindTool, Command: []string{"witness", "select", "--format", "exec"}, Safety: capabilities.SafetyLevelSafe, Builtin: true})

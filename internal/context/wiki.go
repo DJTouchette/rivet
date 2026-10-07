@@ -101,6 +101,7 @@ func walkDocs(dir string, kind Kind, seen map[string]bool) ([]*Document, error) 
 		}
 		if d.IsDir() {
 			name := d.Name()
+			// rivet:intent CTX-001
 			if path != dir && (strings.HasPrefix(name, ".") || name == DraftsSubdir || name == "archive" || name == ".attachments") {
 				return fs.SkipDir
 			}

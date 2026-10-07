@@ -35,7 +35,11 @@ They are organized into three categories:
 
   domains/   — business or system areas (billing, auth, scheduling)
   modules/   — narrower technical subsystems (patient-search, ledger-sync)
-  paradigms/ — cross-cutting patterns (sql-views, event-handling, caching)`,
+  paradigms/ — cross-cutting patterns (sql-views, event-handling, caching)
+
+Business rules — what the code must do rather than what it does — live in
+.rivet/intent/ and are managed with 'rivet intent'. They are listed, shown,
+recommended and linted alongside context docs.`,
 	}
 
 	cmd.AddCommand(
@@ -91,6 +95,9 @@ Configure the embedder with environment variables:
 				return err
 			}
 			docs = append(append(docs, wiki...), runbooks...)
+			if intents, err := rivetctx.LoadIntent("."); err == nil {
+				docs = append(docs, intents...)
+			}
 			if len(docs) == 0 {
 				fmt.Println("No context, wiki, or runbook documents to index.")
 				return nil
@@ -125,6 +132,9 @@ func newContextListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if intents, err := rivetctx.LoadIntent("."); err == nil {
+				docs = append(docs, intents...)
+			}
 			if len(docs) == 0 {
 				fmt.Println("No context documents found.")
 				fmt.Println("Add markdown files to .rivet/context/{domains,modules,paradigms}/")
@@ -158,6 +168,9 @@ func newContextShowCmd() *cobra.Command {
 			}
 			if runbooks, err := rivetctx.LoadRunbooks("."); err == nil {
 				docs = append(docs, runbooks...)
+			}
+			if intents, err := rivetctx.LoadIntent("."); err == nil {
+				docs = append(docs, intents...)
 			}
 
 			name := args[0]
@@ -241,19 +254,32 @@ To add tags and related_paths, use frontmatter in context documents:
 			learnings, _ := rivetctx.LoadLearnings(".rivet/learnings")
 			learnRecs := rivetctx.RecommendLearnings(learnings, query, maxResults)
 
+			// Business rules get their own section: they are requirements,
+			// not one more document to weigh against the others.
+			var intentRecs []rivetctx.Recommendation
+			if intents, _, err := loadIntentDocs(); err == nil {
+				intentRecs = rivetctx.RecommendIntent(intents, query, 3, opts...)
+			}
+
 			if jsonOutput {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
+				if intentRecs == nil {
+					intentRecs = []rivetctx.Recommendation{}
+				}
 				return enc.Encode(map[string]interface{}{
 					"context":   recs,
+					"intent":    intentRecs,
 					"learnings": learnRecs,
 				})
 			}
 
-			if len(recs) == 0 && len(learnRecs) == 0 {
+			if len(recs) == 0 && len(learnRecs) == 0 && len(intentRecs) == 0 {
 				fmt.Printf("No context documents or learning entries match %q\n", query)
 				return nil
 			}
+
+			fmt.Print(rivetctx.FormatIntentRecommendations(intentRecs))
 
 			if len(recs) > 0 {
 				fmt.Printf("Recommended context for %q:\n\n", query)
@@ -317,6 +343,16 @@ Every document:
   untagged-theme        — a subject the body dwells on that no tag covers,
                           so retrieval can't find the doc by it
 
+Intent docs (.rivet/intent/) — see 'rivet intent check --help' for the full list:
+  no-rules / empty-rule        — a doc or rule with nothing in it (error)
+  duplicate-rule-id            — two rules share an ID (error)
+  rule-prefix-mismatch         — a rule ID that doesn't use the doc's prefix (error)
+  unenforced-invariant         — no rivet:intent marker in code or tests (error)
+  unknown-rule-reference       — a marker naming an undefined rule (error)
+  retired-rule-reference       — a marker naming a retired rule (error)
+  untested-invariant, unenforced-policy, pending-enforcement,
+  missing-rationale, missing-ratification, stale-ratification, ...
+
 Wiki docs are free-form and often imported, so only the universal rules apply.
 Code-extracted docs are exempt from frontmatter rules — a rivet:context comment
 has nowhere to put an owner.
@@ -336,17 +372,32 @@ with --strict.`,
 			if runbooks, err := rivetctx.LoadRunbooks("."); err == nil {
 				docs = append(docs, runbooks...)
 			}
+			// Intent docs are linted here too, with their coverage against
+			// the code, so the existing CI step enforces business rules
+			// without a second command. A load failure is reported, not
+			// skipped: silently linting nothing would be a false green.
+			intents, err := rivetctx.LoadIntent(".")
+			if err != nil {
+				return fmt.Errorf("loading intent docs: %w", err)
+			}
+			rivetctx.LinkIntentDomains(intents, docs)
+			docs = append(docs, intents...)
 			if len(docs) == 0 {
 				fmt.Println("No context, wiki, or runbook documents found.")
 				return nil
 			}
 
 			result := rivetctx.Lint(docs, ".")
+			if len(intents) > 0 {
+				coverage := rivetctx.CheckIntentInTree(intents, ".", intentScanOptions())
+				result.Warnings = append(result.Warnings, coverage.Warnings...)
+			}
 
 			// A findings-based exit code is what makes this usable in CI. Usage
 			// text is suppressed because every finding has already been printed
 			// in detail; the root command suppresses cobra's duplicate error
 			// line for every subcommand.
+			// rivet:intent CTX-010
 			failed := result.HasErrors() || (strict && len(result.Warnings) > 0)
 			if failed {
 				cmd.SilenceUsage = true

@@ -207,6 +207,78 @@ Agents get a matching `rivet.runbook` tool (find-by-symptom / list) — runbooks
 
 `rivet init` ships a couple of starter runbooks for operating rivet itself — including **Enable semantic search**, a step-by-step setup an agent can find (`rivet.runbook find "set up embeddings"`) and follow on a fresh, lexical-only install to turn on the embeddings above, with a symptom→cause table for the ways it fails. Runbooks are yours to edit once written: `rivet update` never overwrites one you've changed, but it does tell you when your copy differs from the version rivet now ships.
 
+### Business Rules (Intent)
+
+Every tier above is **descriptive**: it explains the code. When the code and a domain doc disagree, the doc is what's out of date. Intent docs are the **prescriptive** tier, the business rules the code is judged against. When the code and an intent rule disagree, the code is the defect, or the business changed its mind. Only a person decides which.
+
+```
+.rivet/intent/
+  domains/<domain>.md        ← rules for one domain (billing, orders)
+  cross-cutting/<topic>.md   ← rules that apply everywhere (money, privacy)
+  proposals/                 ← agent-filed rule changes, never loaded
+```
+
+Each rule is a bullet with a stable ID. The section it sits under decides how strictly it's held: breaking an **invariant** is a defect, while a **policy** is a business decision that may change.
+
+```markdown
+---
+tags: [billing, invoice, dunning]
+owner: finance
+last_ratified: 2026-10-01      # when a person last confirmed these
+prefix: BIL                    # every rule ID must use it
+# related_paths: inherited from .rivet/context/domains/billing.md unless set
+---
+
+# Billing — intent
+
+## Invariants
+- **BIL-001** An issued invoice is never edited; corrections are credit notes.
+  why: tax law requires an immutable audit trail
+
+## Policies
+- **BIL-010** Dunning reminders start 14 days after the due date.
+  why: finance's collection policy
+- **BIL-011** Invoices over 10,000 EUR need a second approver.
+  why: fraud control
+  enforced: manual — finance ops approve in the ERP
+
+## Retired
+- ~~**BIL-003**~~ Invoices are emailed as PDFs.   ← kept so the ID is never reused
+```
+
+Code and tests point at the rule they enforce with a marker comment in any language. A marker in a test file means the test proves the rule holds:
+
+```go
+// rivet:intent BIL-001
+if inv.Issued { return ErrIssued }
+```
+
+```ts
+// rivet:intent BIL-001, BIL-002 — totals reconcile after edits
+test("issued invoices are immutable", ...)
+```
+
+**CI enforces it.** `rivet intent check` (and the existing `rivet context lint`) fails when:
+
+- an invariant has no marker anywhere
+- a marker names a rule that doesn't exist, or one that was retired
+- two rules share an ID
+
+Untested invariants and unmarked policies are warnings, which `--strict` also fails on. A known gap can be declared with `enforced: pending`, which downgrades it to a warning, so adopting intent in an existing codebase doesn't have to block the build on day one. Markers are found with `git grep`, so untracked files count and gitignored ones don't. Markdown, `.rivet/`, `testdata/`, `node_modules/` and `vendor/` are never scanned; add more globs with `intent.exclude` in config.
+
+**Agents see rules as requirements.** `rivet.context-recommend` lists matching rules first, in their own section, ahead of the descriptive docs. `rivet.intent` answers four questions: which rules govern this file (`path`), what one rule says and where it's enforced (`id`), which rules are relevant to a task (`query`), and which rules my change touches (`changes`/`since`/`staged`). Agents never edit `.rivet/intent/`. If an agent thinks a rule is wrong, it files `rivet.intent-propose`, which lands in `proposals/` for you to review.
+
+**Diff-aware test selection.** `rivet intent affected` (or `--since main`, or `--staged`) lists every rule a change touches: rules marked in changed files, rules whose doc governs a changed file, markers added or removed, and edits to the rule text itself (with before and after). It also lists the tests marked for those rules. When witness selects tests over MCP, the same list is added as a second content block, so the tests that prove a business rule still holds get run even when no import graph connects them to the change.
+
+```bash
+rivet intent scaffold billing          # skeleton with Invariants/Policies/Retired
+rivet intent check                     # coverage table; non-zero exit on errors
+rivet intent for services/billing/invoice.go
+rivet intent show BIL-001              # the rule, plus where it's enforced and tested
+rivet intent affected --since main     # rules this branch touches + their tests
+rivet intent proposals                 # agent-filed changes waiting on you
+```
+
 ### The Feedback Loop
 
 This is where it gets interesting.
@@ -495,6 +567,14 @@ rivet runbook draft <title>   Draft a runbook for human review (--steps, --trigg
 rivet runbook promote <name>  Promote a reviewed draft into an active runbook
 rivet context lint            Check docs for quality, staleness, and broken links
                               (--strict to fail on warnings too, for CI)
+rivet intent scaffold <name>  Start an intent doc (--cross-cutting, --prefix)
+rivet intent list             Intent docs and their rules
+rivet intent show <doc|ID>    A doc, or one rule with where it's enforced
+rivet intent check            Hold rules against rivet:intent markers (CI gate)
+rivet intent for <path>       The business rules that govern a file
+rivet intent affected         Rules a change touches + tests that verify them
+                              (--since <ref>, --staged, or paths)
+rivet intent proposals        Agent-filed rule changes awaiting review
 rivet learnings add <title>   Record a learning (--observation required)
 rivet learnings list          Active (un-promoted) entries (--all, --json)
 rivet learnings show <name>   Read one entry

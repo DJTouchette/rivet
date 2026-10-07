@@ -1,0 +1,5 @@
+# Rivet runtime caches — derived from the tree, regenerated on demand.
+.rivet/cache/
+.rivet/recon/
+.recon/
+.witness/

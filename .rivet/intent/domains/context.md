@@ -26,8 +26,9 @@ itself or another agent — with the authority of something a person decided.
   under an ID that exists.
   why: every marker naming the ID would silently start pointing at a different rule
 - **CTX-004** Agents may draft rules, but a drafted rule takes effect only when
-  a person approves it at an interactive terminal, and approval refuses a
-  draft written against a rule that has since changed.
+  a person confirms it in an MCP elicitation prompt — never through anything a
+  shell or a tool argument can supply — and approval refuses a draft written
+  against a rule that has since changed.
   why: rules carry the business's authority; a person must decide each one,
   and must never overwrite a newer decision by approving an older draft
 

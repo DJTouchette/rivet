@@ -886,7 +886,7 @@ func TestIntentHarness_MCPProposalsNeverChangeRules(t *testing.T) {
 	if r[0].Result.IsError {
 		t.Fatalf("valid proposal refused: %s", r[0].text())
 	}
-	requireContains(t, "propose reply", r[0].text(), ".rivet/intent/proposals/", "NOT a rule yet", "rivet intent approve", "Never run approve yourself")
+	requireContains(t, "propose reply", r[0].text(), ".rivet/intent/proposals/", "NOT a rule yet", "rivet.intent-approve", "only they can answer")
 	for i, why := range map[int]string{1: "choosing its own ID", 2: "amending an unknown rule", 3: "omitting why", 4: "retiring a retired rule"} {
 		if !r[i].Result.IsError {
 			t.Errorf("proposal %s must be refused, got: %s", why, r[i].text())
@@ -1021,65 +1021,116 @@ func TestIntentHarness_SyncListsIntentDocs(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Supervised rule writing: the agent drafts, a person approves
+// Supervised rule writing: the agent drafts, the person approves in a prompt
 // ---------------------------------------------------------------------------
 
-// runInTerminal runs rivet under a pseudo-terminal, typing input, the way a
-// person at a shell would. It uses util-linux script(1), so it only runs on
-// Linux; the refusal path (no terminal) is tested everywhere.
-func (s *shop) runInTerminal(input string, args ...string) runResult {
+// elicitingClient is the initialize params of an MCP client that, like Claude
+// Code and Codex, can show the person an elicitation prompt.
+const elicitingClient = `{"protocolVersion":"2025-06-18","capabilities":{"elicitation":{}},"clientInfo":{"name":"harness-client","version":"1"}}`
+
+// session runs one `rivet serve` over a scripted stdio exchange. Each line is
+// sent in order; a server request that arrives mid-call (elicitation/create)
+// is answered by the next scripted line, exactly as a client relays the
+// person's answer. It returns every message the server wrote, in order.
+func (s *shop) session(initParams string, lines ...string) []map[string]interface{} {
 	s.t.Helper()
-	if runtime.GOOS != "linux" {
-		s.t.Skip("pseudo-terminal approval is exercised on Linux only")
-	}
-	if _, err := exec.LookPath("script"); err != nil {
-		s.t.Skip("script(1) not available")
-	}
-	quoted := []string{shellQuote(s.bin)}
-	for _, a := range args {
-		quoted = append(quoted, shellQuote(a))
-	}
-	cmd := exec.Command("script", "-qec", strings.Join(quoted, " "), "/dev/null")
+	in := `{"jsonrpc":"2.0","id":0,"method":"initialize","params":` + initParams + "}\n" + strings.Join(lines, "\n") + "\n"
+	cmd := exec.Command(s.bin, "serve")
 	cmd.Dir = s.dir
 	cmd.Env = append(os.Environ(), "HOME="+s.home, "XDG_CONFIG_HOME="+filepath.Join(s.home, ".config"), "RIVET_EMBED_BACKEND=")
-	cmd.Stdin = strings.NewReader(input)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
-	code := 0
-	if ee, ok := err.(*exec.ExitError); ok {
-		code = ee.ExitCode()
-	} else if err != nil {
-		s.t.Fatalf("script: %v", err)
+	cmd.Stdin = strings.NewReader(in)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		s.t.Fatalf("rivet serve: %v\n%s", err, errb.String())
 	}
-	return runResult{stdout: out.String(), code: code}
+	var msgs []map[string]interface{}
+	sc := bufio.NewScanner(&out)
+	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
+	for sc.Scan() {
+		var m map[string]interface{}
+		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+			s.t.Fatalf("bad line %q: %v", sc.Text(), err)
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs
 }
 
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+func callLine(id int, tool string, args map[string]interface{}) string {
+	b, _ := json.Marshal(map[string]interface{}{"jsonrpc": "2.0", "id": id, "method": "tools/call",
+		"params": map[string]interface{}{"name": tool, "arguments": args}})
+	return string(b)
+}
+
+// answerLine is the person's reply to the server's n-th request this session.
+func answerLine(n int, action, confirm string) string {
+	result := map[string]interface{}{"action": action}
+	if confirm != "" {
+		result["content"] = map[string]interface{}{"confirm": confirm}
+	}
+	b, _ := json.Marshal(map[string]interface{}{"jsonrpc": "2.0", "id": fmt.Sprintf("rivet-%d", n), "result": result})
+	return string(b)
+}
+
+// replyText is the text of the server's reply to request id.
+func replyText(t *testing.T, msgs []map[string]interface{}, id int) string {
+	t.Helper()
+	for _, m := range msgs {
+		if m["id"] == float64(id) && m["method"] == nil {
+			var parts []string
+			for _, c := range m["result"].(map[string]interface{})["content"].([]interface{}) {
+				parts = append(parts, c.(map[string]interface{})["text"].(string))
+			}
+			return strings.Join(parts, "\n")
+		}
+	}
+	t.Fatalf("no reply to request %d in %v", id, msgs)
+	return ""
+}
+
+// prompts returns the elicitation messages the server showed the person.
+func prompts(msgs []map[string]interface{}) []string {
+	var out []string
+	for _, m := range msgs {
+		if m["method"] == "elicitation/create" {
+			out = append(out, m["params"].(map[string]interface{})["message"].(string))
+		}
+	}
+	return out
+}
 
 // proposalName pulls the proposal name out of a rivet.intent-propose reply.
 func proposalName(t *testing.T, reply string) string {
 	t.Helper()
-	for _, line := range strings.Split(reply, "\n") {
-		if f := strings.Fields(line); len(f) >= 3 && f[0] == "rivet" && f[2] == "approve" {
-			return f[3]
+	const lead = "Drafted proposal "
+	if i := strings.Index(reply, lead); i >= 0 {
+		rest := reply[i+len(lead):]
+		if j := strings.Index(rest, ":"); j > 0 {
+			return rest[:j]
 		}
 	}
-	t.Fatalf("no approve command in reply:\n%s", reply)
+	t.Fatalf("no proposal name in reply:\n%s", reply)
 	return ""
+}
+
+func (s *shop) propose(args map[string]interface{}) string {
+	s.t.Helper()
+	msgs := s.session(elicitingClient, callLine(1, "rivet.intent-propose", args))
+	return proposalName(s.t, replyText(s.t, msgs, 1))
 }
 
 func TestIntentHarness_AgentCannotApproveItsOwnRule(t *testing.T) {
 	s := newShop(t)
 	before := s.read(".rivet/intent/domains/billing.md")
-	r := s.mcp(toolCall("rivet.intent-propose", map[string]interface{}{
+	name := s.propose(map[string]interface{}{
 		"change": "add", "doc": "intent/billing", "statement": "A credit note never exceeds the invoice it corrects.",
 		"why": "finance: over-crediting is a refund loophole", "author": "claude",
-	}))
-	name := proposalName(t, r[0].text())
+	})
 
-	// An agent's shell is non-interactive: piping the confirmation in, or
-	// passing nothing at all, is refused before anything is read or written.
+	// The command line can't approve at all — whatever is on stdin, and
+	// whether or not it looks like a terminal: anything a shell can run, an
+	// agent can run.
 	for _, input := range []string{"BIL-012\n", ""} {
 		cmd := exec.Command(s.bin, "intent", "approve", name)
 		cmd.Dir = s.dir
@@ -1087,15 +1138,33 @@ func TestIntentHarness_AgentCannotApproveItsOwnRule(t *testing.T) {
 		cmd.Stdin = strings.NewReader(input)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
-			t.Fatalf("approve without a terminal succeeded:\n%s", out)
+			t.Fatalf("CLI approve succeeded:\n%s", out)
 		}
-		requireContains(t, "non-interactive approve", string(out), "interactive terminal")
+		requireContains(t, "CLI approve", string(out), "not available from the command line", "rivet.intent-approve")
 	}
+
+	// Over MCP, a client that can't ask the person is refused, never asked.
+	noElicit := s.session(`{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"old-client"}}`,
+		callLine(1, "rivet.intent-approve", map[string]interface{}{"proposal": name}))
+	requireContains(t, "approve without elicitation", replyText(t, noElicit, 1), "will not approve a rule without the user's own confirmation")
+	if len(prompts(noElicit)) != 0 {
+		t.Fatal("prompted a client that never offered elicitation")
+	}
+
+	// The person declines in the prompt.
+	declined := s.session(elicitingClient,
+		callLine(1, "rivet.intent-approve", map[string]interface{}{"proposal": name}),
+		answerLine(1, "decline", ""))
+	requireContains(t, "declined approve", replyText(t, declined, 1), "The user declined to approve BIL-012. Nothing changed")
+
 	if s.read(".rivet/intent/domains/billing.md") != before {
-		t.Fatal("refused approval still changed the doc")
+		t.Fatal("refused approvals still changed the doc")
 	}
 	if rep, _ := s.check(); statuses(rep)["BIL-012"] != "" {
 		t.Fatal("an unapproved rule is being enforced")
+	}
+	if out := s.run("intent", "proposals").stdout; !strings.Contains(out, name) {
+		t.Fatalf("declined proposal should still be pending:\n%s", out)
 	}
 }
 
@@ -1106,48 +1175,65 @@ func TestIntentHarness_SupervisedRuleWriting(t *testing.T) {
 	s.git("config", "user.email", "pat@example.com")
 
 	// 1. The agent drafts a new invariant, a new doc, and an amendment.
-	r := s.mcp(
-		toolCall("rivet.intent-propose", map[string]interface{}{
+	drafts := s.session(elicitingClient,
+		callLine(1, "rivet.intent-propose", map[string]interface{}{
 			"change": "add", "doc": "intent/billing", "statement": "A credit note never exceeds the invoice it corrects.",
 			"why": "finance: over-crediting is a refund loophole", "author": "claude", "evidence": "user asked in chat",
 		}),
-		toolCall("rivet.intent-propose", map[string]interface{}{
+		callLine(2, "rivet.intent-propose", map[string]interface{}{
 			"change": "add", "doc": "shipping", "class": "policy", "scope": "cross-cutting",
 			"statement": "Parcels ship within two business days.", "why": "the SLA we sell",
 		}),
-		toolCall("rivet.intent-propose", map[string]interface{}{
+		callLine(3, "rivet.intent-propose", map[string]interface{}{
 			"change": "amend", "rule_id": "BIL-010", "statement": "Dunning reminders start 7 days after the due date.",
 			"why": "finance shortened the window",
 		}),
 	)
-	addName, shipName, amendName := proposalName(t, r[0].text()), proposalName(t, r[1].text()), proposalName(t, r[2].text())
-	requireContains(t, "new-doc reply", r[1].text(), "Approving it creates intent/shipping")
+	addName := proposalName(t, replyText(t, drafts, 1))
+	shipName := proposalName(t, replyText(t, drafts, 2))
+	amendName := proposalName(t, replyText(t, drafts, 3))
+	requireContains(t, "draft reply", replyText(t, drafts, 1), "NOT a rule yet", "rivet.intent-approve", "only they can answer")
+	requireContains(t, "new-doc reply", replyText(t, drafts, 2), "Approving it creates intent/shipping")
 
-	// 2. The person reviews the exact edit.
+	// 2. The person can read the exact edit from the CLI.
 	review := s.run("intent", "review", addName)
-	if review.code != 0 {
-		t.Fatalf("review: %s%s", review.stdout, review.stderr)
-	}
-	requireContains(t, "review", review.stdout, "add BIL-012 in intent/billing (invariant)", "drafted", "by claude",
+	requireContains(t, "review", review.stdout, "add BIL-012 in intent/billing (invariant)", "by claude",
 		"Changes .rivet/intent/domains/billing.md", "+ - **BIL-012** A credit note never exceeds the invoice it corrects.",
-		"+   why: finance: over-crediting is a refund loophole")
+		"rivet.intent-approve")
 
-	// 3. A wrong confirmation approves nothing.
-	no := s.runInTerminal("BIL-999\n", "intent", "approve", addName)
-	requireContains(t, "cancelled approve", no.stdout, "Not approved; nothing changed.")
+	// 3. In the prompt, a wrong confirmation approves nothing.
+	wrong := s.session(elicitingClient,
+		callLine(1, "rivet.intent-approve", map[string]interface{}{"proposal": addName}),
+		answerLine(1, "accept", "BIL-999"))
+	requireContains(t, "wrong confirmation", replyText(t, wrong, 1), "did not match BIL-012")
 	requireNotContains(t, "billing.md", s.read(".rivet/intent/domains/billing.md"), "BIL-012")
 
-	// 4. Typing the rule ID at a terminal approves it.
-	yes := s.runInTerminal("BIL-012\n", "intent", "approve", addName)
-	if yes.code != 0 {
-		t.Fatalf("approve: %s", yes.stdout)
+	// 4. The person types the rule ID: approved. A second approval in the
+	// same session (the new shipping doc) sees the first one's result.
+	ok := s.session(elicitingClient,
+		callLine(1, "rivet.intent-approve", map[string]interface{}{"proposal": addName}),
+		answerLine(1, "accept", "BIL-012"),
+		callLine(2, "rivet.intent-approve", map[string]interface{}{"proposal": shipName}),
+		answerLine(2, "accept", "SHI-001"),
+		callLine(3, "rivet.intent", map[string]interface{}{"id": "BIL-012"}),
+	)
+	shown := prompts(ok)
+	if len(shown) != 2 {
+		t.Fatalf("want 2 prompts, got %d", len(shown))
 	}
-	requireContains(t, "approve", yes.stdout, "Approved by Pat Person <pat@example.com>: add BIL-012 in intent/billing")
+	requireContains(t, "approval prompt", shown[0], "An agent asks you to ratify a business rule",
+		"+ - **BIL-012** A credit note never exceeds the invoice it corrects.", "Type BIL-012 to approve")
+	requireContains(t, "approve reply", replyText(t, ok, 1), "The user approved it: add BIL-012 in intent/billing",
+		"Pat Person <pat@example.com> (confirmed in harness-client)", "Mark the code and tests")
+	requireContains(t, "rule served after approval", replyText(t, ok, 3), "BIL-012 [invariant]", "coverage: unenforced")
+
 	doc := s.read(".rivet/intent/domains/billing.md")
 	requireContains(t, "billing.md", doc, "- **BIL-012** A credit note never exceeds the invoice it corrects.", "last_ratified: 20")
 	requireNotContains(t, "billing.md", doc, "last_ratified: 2099-01-01")
-	archived := s.read(".rivet/intent/proposals/archive/" + addName + ".md")
-	requireContains(t, "archived proposal", archived, "status: approved", "approved_by: Pat Person <pat@example.com>", "applied_as: BIL-012")
+	requireContains(t, "archived proposal", s.read(".rivet/intent/proposals/archive/"+addName+".md"),
+		"status: approved", "approved_by: Pat Person <pat@example.com> (confirmed in harness-client)", "applied_as: BIL-012")
+	requireContains(t, "shipping doc", s.read(".rivet/intent/cross-cutting/shipping.md"),
+		"prefix: SHI", "## Policies", "- **SHI-001** Parcels ship within two business days.")
 
 	// 5. The approved rule is now held against the code like any other.
 	rep, code := s.check()
@@ -1161,24 +1247,18 @@ func TestIntentHarness_SupervisedRuleWriting(t *testing.T) {
 		t.Fatalf("BIL-012 = %q after marking code and test", statuses(rep)["BIL-012"])
 	}
 
-	// 6. The new-doc proposal creates the doc when approved.
-	ship := s.runInTerminal("SHI-001\n", "intent", "approve", shipName)
-	if ship.code != 0 {
-		t.Fatalf("approve shipping: %s", ship.stdout)
-	}
-	requireContains(t, "shipping doc", s.read(".rivet/intent/cross-cutting/shipping.md"), "prefix: SHI", "## Policies", "- **SHI-001** Parcels ship within two business days.")
-
-	// 7. A person edits BIL-010 by hand after the amendment was drafted:
-	// approving the stale draft would overwrite their decision, so it's refused.
+	// 6. A person edits BIL-010 by hand after the amendment was drafted.
+	// Approving the stale draft would overwrite their decision, so it is
+	// refused before the person is even asked.
 	s.edit(".rivet/intent/domains/billing.md", "start 14 days after", "start 10 days after")
-	stale := s.runInTerminal("BIL-010\n", "intent", "approve", amendName)
-	if stale.code == 0 {
-		t.Fatalf("stale amendment approved:\n%s", stale.stdout)
+	stale := s.session(elicitingClient, callLine(1, "rivet.intent-approve", map[string]interface{}{"proposal": amendName}))
+	requireContains(t, "stale approve", replyText(t, stale, 1), "changed after this proposal was drafted")
+	if len(prompts(stale)) != 0 {
+		t.Fatal("asked the person to approve a stale draft")
 	}
-	requireContains(t, "stale approve", stale.stdout, "changed after this proposal was drafted")
 	requireContains(t, "billing.md", s.read(".rivet/intent/domains/billing.md"), "start 10 days after")
 
-	// 8. ...so the person rejects it, and nothing is left pending.
+	// 7. ...so the person rejects it, and nothing is left pending.
 	rej := s.run("intent", "reject", amendName, "--reason", "superseded by the 10-day decision")
 	if rej.code != 0 {
 		t.Fatalf("reject: %s%s", rej.stdout, rej.stderr)

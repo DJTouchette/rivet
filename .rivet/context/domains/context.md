@@ -113,12 +113,19 @@ promotion pass folds it into a curated doc.
 - **A scan failure is an error, not an empty result.** `CheckIntentInTree`
   reports `intent-scan-failed` rather than "no markers", which would fail every
   invariant for the wrong reason — or, for a project with only policies, pass.
-- **Supervised rule writing is gated in the CLI, not the library.** Anything
-  linking package context can call `ApplyProposalPlan`; what keeps agents from
-  ratifying their own drafts is `rivet intent approve` refusing a non-terminal
-  stdin. Don't expose approval over MCP or behind a `--yes` flag — either would
-  hand the decision to the agent. Approval is refused when the rule's
-  fingerprint or the doc changed after drafting/review (`ErrProposalStale`).
+- **Supervised rule writing is gated by MCP elicitation, not by the library.**
+  Anything linking package context can call `ApplyProposalPlan`; the only
+  approval path is `rivet.intent-approve`, which asks the person through
+  `elicitation/create` — a prompt the client shows the user, whose answer never
+  passes through the model. There is deliberately no CLI approve (`rivet intent
+  approve` is a hidden stub that refuses): anything a shell can run, an agent
+  can run. Never add a `--yes` flag or a tool argument that approves. Clients
+  that didn't advertise elicitation, or negotiated a pre-2025-06-18 protocol,
+  are refused rather than approved silently.
+- **The server can ask the client mid-call.** `conn.request` (`internal/mcp/client.go`)
+  writes a server request and reads until its response arrives, answering pings
+  inline and queueing other client messages for the main loop. Anything that
+  reads stdin in `Serve` must go through `conn.next`, or queued messages are lost.
 - Intent docs are named `intent/<file>` so they never collide with the domain
   doc they govern, and inherit its `related_paths` when they declare none.
 - Lint exits non-zero on errors, or on anything with `--strict`. CI runs

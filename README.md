@@ -269,21 +269,23 @@ Untested invariants and unmarked policies are warnings, which `--strict` also fa
 
 **Agents see rules as requirements.** `rivet.context-recommend` lists matching rules first, in their own section, ahead of the descriptive docs. `rivet.intent` answers four questions: which rules govern this file (`path`), what one rule says and where it's enforced (`id`), which rules are relevant to a task (`query`), and which rules my change touches (`changes`/`since`/`staged`).
 
-**Agents write rules; people ratify them.** An agent can add, amend or retire a rule. It does that with `rivet.intent-propose`, never by editing `.rivet/intent/`. The tool writes a complete, ready-to-apply draft to `.rivet/intent/proposals/`: the rule text, its class, the business reason, and the next free ID. Nothing in that folder is loaded as a rule. You review the draft and decide:
+**Agents write rules; people ratify them.** An agent can add, amend or retire a rule. It does that with `rivet.intent-propose`, never by editing `.rivet/intent/`. The tool writes a complete, ready-to-apply draft to `.rivet/intent/proposals/`: the rule text, its class, the business reason, and the next free ID. Nothing in that folder is loaded as a rule.
+
+When you want it applied, the agent calls `rivet.intent-approve`. Rivet then asks **you** directly through MCP elicitation: Claude Code or Codex shows a confirmation prompt with the exact diff to the intent doc, and you type the rule ID to approve. The prompt goes from the server to you, so the model never sees or answers it, and nothing the agent passes can approve on your behalf. A client that can't show such a prompt is refused rather than approved silently. There is deliberately no command-line approve, because anything a shell can run, an agent can run.
 
 ```bash
 rivet intent proposals                       # what's waiting
 rivet intent review add-bil-012-46d767       # the exact diff to the intent doc
-rivet intent approve add-bil-012-46d767      # type the rule ID to confirm
-rivet intent reject  add-bil-012-46d767 --reason "covered by BIL-001"
+rivet intent reject add-bil-012-46d767 --reason "covered by BIL-001"
+# to approve: ask the agent; you confirm in your client's prompt
 ```
 
-- **Only a person at a terminal can approve.** `approve` refuses to run without an interactive terminal, and agents run commands non-interactively. You confirm by typing the rule ID rather than `y`.
-- **You can change the wording first.** Edit the proposal file before approving, and approve applies what the file says when you run it.
-- **Approval won't overwrite a newer decision.** It refuses a draft written against a rule that has changed since, or a doc edited between review and approval.
-- **Approving records it.** It writes the doc, sets `last_ratified`, and archives the proposal in `proposals/archive/` with your git identity. Rejecting archives it with your reason.
+- **You can change the wording first.** Edit the proposal file before approving, and approval applies what the file says at that moment.
+- **Approval won't overwrite a newer decision.** It refuses a draft written against a rule that has changed since, before you're even prompted. It also refuses if the doc was edited between your review and your approval.
+- **Approving records it.** It writes the doc, sets `last_ratified`, and archives the proposal in `proposals/archive/` with your git identity and the client you confirmed in. Rejecting archives it with your reason.
 - **Unreviewed drafts are visible in CI.** Pending proposals show as `open-proposal` warnings, so `--strict` CI fails on a branch carrying drafts nobody has decided on.
 - **An approved rule is enforced from then on.** A newly approved invariant fails the check until code and tests are marked as enforcing it.
+- **It doesn't stop direct file edits.** An agent with file access can still edit `.rivet/intent/` directly, as can anyone. Protect that path with code review, for example a `CODEOWNERS` entry for `.rivet/intent/`.
 
 **Diff-aware test selection.** `rivet intent affected` (or `--since main`, or `--staged`) lists every rule a change touches: rules marked in changed files, rules whose doc governs a changed file, markers added or removed, and edits to the rule text itself (with before and after). It also lists the tests marked for those rules. When witness selects tests over MCP, the same list is added as a second content block, so the tests that prove a business rule still holds get run even when no import graph connects them to the change.
 
@@ -593,8 +595,8 @@ rivet intent affected         Rules a change touches + tests that verify them
                               (--since <ref>, --staged, or paths)
 rivet intent proposals        Agent-drafted rule changes awaiting a person
 rivet intent review <name>    The exact change a proposal makes to the doc
-rivet intent approve <name>   Apply it (interactive terminal; type the rule ID)
 rivet intent reject <name>    Archive it unapplied (--reason)
+                              (approve is MCP-only: you confirm in your client)
 rivet learnings add <title>   Record a learning (--observation required)
 rivet learnings list          Active (un-promoted) entries (--all, --json)
 rivet learnings show <name>   Read one entry

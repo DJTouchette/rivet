@@ -501,3 +501,54 @@ func LineDiff(before, after string) string {
 	}
 	return out.String()
 }
+
+// FormatProposalPlan describes a proposal and the diff approving it makes —
+// what a person reads before deciding, in the CLI and in the MCP prompt alike.
+// root makes the doc path relative for display.
+func FormatProposalPlan(plan *ProposalPlan, root string) string {
+	var b strings.Builder
+	p := plan.Proposal
+	fmt.Fprintf(&b, "Proposal %s\n", p.Name)
+	fmt.Fprintf(&b, "  %s %s in %s", p.Change, plan.RuleID, plan.DocName)
+	if p.Rule != nil && p.Change != ProposeRetire {
+		fmt.Fprintf(&b, " (%s)", p.Rule.Class)
+	}
+	b.WriteString("\n")
+	if p.Author != "" || p.Date != "" {
+		fmt.Fprintf(&b, "  drafted %s %s\n", p.Date, strings.TrimSpace("by "+p.Author))
+	}
+	if plan.Renumbered {
+		fmt.Fprintf(&b, "  note: %s was taken after this was drafted, so it will be added as %s\n", p.RuleID, plan.RuleID)
+	}
+	if p.Evidence != "" {
+		fmt.Fprintf(&b, "  evidence: %s\n", oneLine(p.Evidence, 200))
+	}
+	rel := plan.DocPath
+	if r, err := filepath.Rel(root, plan.DocPath); err == nil {
+		rel = r
+	}
+	verb := "Changes"
+	if plan.Created {
+		verb = "Creates"
+	}
+	fmt.Fprintf(&b, "\n%s %s:\n\n", verb, filepath.ToSlash(rel))
+	b.WriteString(LineDiff(plan.Before, plan.After))
+	return b.String()
+}
+
+// ApproverIdentity is who an approval is recorded against: the git identity
+// configured for root, else the OS user.
+func ApproverIdentity(root string) string {
+	if out, err := gitOut(root, "config", "user.name"); err == nil {
+		if name := strings.TrimSpace(out); name != "" {
+			if email, err := gitOut(root, "config", "user.email"); err == nil && strings.TrimSpace(email) != "" {
+				return name + " <" + strings.TrimSpace(email) + ">"
+			}
+			return name
+		}
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return os.Getenv("USERNAME")
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	rivetctx "github.com/djtouchette/rivet/internal/context"
 )
@@ -203,14 +204,13 @@ func (s *Server) handleIntentPropose(req *Request, args map[string]interface{}) 
 			created = fmt.Sprintf(" Approving it creates %s.", p.Doc)
 		}
 	}
-	msg := fmt.Sprintf("Drafted proposal to %s %s in %s at %s.%s\n\n"+
-		"It is NOT a rule yet: nothing changes, and the code must keep meeting the current rules, until a person approves it. "+
-		"Tell the user it is waiting and give them these commands to run in their own terminal:\n\n"+
-		"  rivet intent review %s     # see the exact change to the doc\n"+
-		"  rivet intent approve %s    # apply it (interactive — a person confirms)\n"+
-		"  rivet intent reject %s --reason \"...\"\n\n"+
-		"Never run approve yourself. Once it is approved, mark the code and tests that enforce %s with rivet:intent comments.",
-		p.Change, p.RuleID, p.Doc, filepath.ToSlash(path), created, name, name, name, p.RuleID)
+	msg := fmt.Sprintf("Drafted proposal %s: %s %s in %s (%s).%s\n\n"+
+		"It is NOT a rule yet: nothing changes, and the code must keep meeting the current rules, until the user approves it. "+
+		"Tell the user it is waiting and ask whether to approve it now. If they want to, call rivet.intent-approve with proposal=%q — "+
+		"rivet shows them the change in a confirmation prompt that only they can answer. They can also read it first with 'rivet intent review %s', "+
+		"or reject it with 'rivet intent reject %s --reason ...'.\n\n"+
+		"Once approved, mark the code and tests that enforce %s with rivet:intent comments.",
+		name, p.Change, p.RuleID, p.Doc, filepath.ToSlash(path), created, name, name, name, p.RuleID)
 	return s.textResult(req, msg, false)
 }
 
@@ -320,4 +320,95 @@ func flagValue(args []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+// handleIntentApprove implements rivet.intent-approve: the person's half of
+// supervised rule writing, inside the agent's own session. The agent may call
+// it; it cannot pass it. The decision is asked of the person through MCP
+// elicitation — a prompt the client shows the user directly, whose answer
+// never passes through the model — and a client that can't ask is refused
+// rather than approving without asking.
+func (s *Server) handleIntentApprove(req *Request, args map[string]interface{}) *Response {
+	ref := strings.TrimSpace(stringArg(args, "proposal"))
+	if ref == "" {
+		return s.textResult(req, "Error: 'proposal' is required — the name from rivet.intent-propose's reply.", true)
+	}
+	path, err := rivetctx.ResolveIntentProposal(s.intentDir, ref)
+	if err != nil {
+		return s.textResult(req, "Error: "+err.Error(), true)
+	}
+	prop, err := rivetctx.LoadIntentProposal(path)
+	if err != nil {
+		return s.textResult(req, "Error: "+err.Error(), true)
+	}
+
+	// Plan against the docs as they are now, not as they were at startup:
+	// an earlier approval this session may have changed them.
+	intents, err := rivetctx.LoadIntent(s.intentRoot)
+	if err != nil {
+		return s.textResult(req, "Error: loading intent docs: "+err.Error(), true)
+	}
+	rivetctx.LinkIntentDomains(intents, s.contexts)
+	plan, err := rivetctx.PlanProposal(s.intentRoot, intents, prop, time.Now())
+	if err != nil {
+		return s.textResult(req, "Not approved: "+err.Error(), true)
+	}
+
+	ask := s.elicitor()
+	if ask == nil {
+		return s.textResult(req, "Not approved: this MCP client did not offer to ask the user directly (no elicitation support), "+
+			"and rivet will not approve a rule without the user's own confirmation. Tell the user the proposal is waiting; "+
+			"they can update their client (Claude Code and Codex both support elicitation), or apply it by editing the intent doc themselves.", true)
+	}
+
+	// rivet:intent CTX-004
+	message := "An agent asks you to ratify a business rule. Once approved, CI holds the code to it.\n\n" +
+		rivetctx.FormatProposalPlan(plan, s.intentRoot) +
+		fmt.Sprintf("\nType %s to approve it. Decline to leave the rules unchanged.", plan.RuleID)
+	res, err := ask(message, map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"confirm": map[string]interface{}{
+				"type":        "string",
+				"title":       "Type " + plan.RuleID + " to approve",
+				"description": "Typing the rule ID, rather than ticking a box, makes approving the wrong change by habit unlikely.",
+			},
+		},
+		"required": []string{"confirm"},
+	})
+	if err != nil {
+		return s.textResult(req, "Not approved: could not ask the user ("+err.Error()+"). Nothing changed.", true)
+	}
+
+	switch res.Action {
+	case ElicitAccept:
+	case ElicitDecline:
+		return s.textResult(req, fmt.Sprintf("The user declined to approve %s. Nothing changed; the proposal is still pending. "+
+			"Ask whether they want it redrafted, or rejected with 'rivet intent reject %s --reason ...'.", plan.RuleID, prop.Name), false)
+	default:
+		return s.textResult(req, fmt.Sprintf("The user dismissed the approval prompt for %s. Nothing changed; the proposal is still pending.", plan.RuleID), false)
+	}
+	typed, _ := res.Content["confirm"].(string)
+	if strings.TrimSpace(typed) != plan.RuleID {
+		return s.textResult(req, fmt.Sprintf("Not approved: the confirmation typed did not match %s. Nothing changed; the proposal is still pending.", plan.RuleID), false)
+	}
+
+	approver := rivetctx.ApproverIdentity(s.intentRoot)
+	if s.client.name != "" {
+		approver += " (confirmed in " + s.client.name + ")"
+	}
+	if err := rivetctx.ApplyProposalPlan(plan, approver, time.Now()); err != nil {
+		return s.textResult(req, "Not approved: "+err.Error(), true)
+	}
+	if reloaded, err := rivetctx.LoadIntent(s.intentRoot); err == nil {
+		rivetctx.LinkIntentDomains(reloaded, s.contexts)
+		s.intents = reloaded
+	}
+
+	next := fmt.Sprintf("Mark the code and tests that enforce %s with rivet:intent comments — 'rivet intent check' fails on an invariant nothing marks.", plan.RuleID)
+	if prop.Change == rivetctx.ProposeRetire {
+		next = fmt.Sprintf("Remove the rivet:intent markers naming %s — 'rivet intent check' fails while code still points at a retired rule.", plan.RuleID)
+	}
+	return s.textResult(req, fmt.Sprintf("The user approved it: %s %s in %s is now a ratified rule (recorded as approved by %s).\n\n%s",
+		prop.Change, plan.RuleID, plan.DocName, approver, next), false)
 }

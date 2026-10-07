@@ -170,10 +170,11 @@ func TestToolsList(t *testing.T) {
 	var result toolsListResult
 	unmarshalResult(t, resp, &result)
 
-	// 8 rivet tools (context-list/show/recommend, runbook, learn, runbook-draft,
-	// intent, intent-propose) + 2 rally pin tools + 2 registry capabilities = 12
-	if len(result.Tools) != 12 {
-		t.Fatalf("expected 12 tools, got %d", len(result.Tools))
+	// 9 rivet tools (context-list/show/recommend, runbook, learn, runbook-draft,
+	// intent, intent-propose, intent-approve) + 2 rally pin tools + 2 registry
+	// capabilities = 13
+	if len(result.Tools) != 13 {
+		t.Fatalf("expected 13 tools, got %d", len(result.Tools))
 	}
 
 	byName := map[string]Tool{}
@@ -187,7 +188,7 @@ func TestToolsList(t *testing.T) {
 	wantOrder := []string{
 		"rivet.context-list", "rivet.context-show", "rivet.context-recommend",
 		"rivet.runbook", "rivet.learn", "rivet.runbook-draft",
-		"rivet.intent", "rivet.intent-propose",
+		"rivet.intent", "rivet.intent-propose", "rivet.intent-approve",
 		"rally.pin", "rally.unpin",
 		// Registry capabilities follow (sorted by name).
 		"danger-cmd", "echo-test",

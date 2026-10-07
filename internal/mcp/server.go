@@ -201,6 +201,13 @@ type Server struct {
 	learningsDir string            // where rivet.learn writes entries
 	semantic     rivetctx.Semantic // optional embedding-based recommend signal; nil = lexical-only
 
+	// The client on the other end, as of initialize, and the live stream to
+	// it during Serve (nil under HandleMessage). elicit overrides how the
+	// person is asked, for tests.
+	client clientState
+	conn   *conn
+	elicit Elicitor
+
 	// Session state for nudging.
 	reconCallsSinceLearn int
 	contextShown         bool // true after rivet.context-show is called
@@ -277,11 +284,13 @@ func (s *Server) SetLogger(l *log.Logger) {
 func (s *Server) Serve(in io.Reader, out io.Writer) error {
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	s.conn = &conn{scanner: scanner, out: out}
+	defer func() { s.conn = nil }()
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		line, ok := s.conn.next()
+		if !ok {
+			break
 		}
 
 		var req Request
@@ -297,8 +306,9 @@ func (s *Server) Serve(in io.Reader, out io.Writer) error {
 
 		s.logger.Printf("-> %s (id=%s)", req.Method, string(req.ID))
 
-		// Notifications (no id field) never get a response.
-		if req.ID == nil {
+		// Notifications (no id field) never get a response, and neither do
+		// stray responses to requests of ours nobody is waiting on.
+		if req.ID == nil || req.Method == "" {
 			continue
 		}
 
@@ -327,6 +337,12 @@ func (s *Server) HandleMessage(msg []byte) *Response {
 }
 
 func (s *Server) writeResponse(out io.Writer, resp Response) {
+	if s.conn != nil {
+		if err := s.conn.write(resp); err != nil {
+			s.logger.Printf("write error: %v", err)
+		}
+		return
+	}
 	data, err := json.Marshal(resp)
 	if err != nil {
 		s.logger.Printf("marshal error: %v", err)
@@ -364,11 +380,18 @@ func (s *Server) handleRequest(req *Request) *Response {
 // ---------------------------------------------------------------------------
 
 func (s *Server) handleInitialize(req *Request) *Response {
+	var params initializeParams
+	_ = json.Unmarshal(req.Params, &params)
+	s.client = clientState{
+		version:     negotiateVersion(params.ProtocolVersion),
+		elicitation: params.Capabilities.Elicitation != nil,
+		name:        params.ClientInfo.Name,
+	}
 	return &Response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result: initializeResult{
-			ProtocolVersion: protocolVersion,
+			ProtocolVersion: s.client.version,
 			Capabilities: serverCapabilities{
 				Tools:     &toolsCapability{},
 				Resources: &resourcesCapability{},
@@ -607,6 +630,23 @@ func (s *Server) handleToolsList(req *Request) *Response {
 			},
 		},
 		Tool{
+			Name: "rivet.intent-approve",
+			Description: "[guarded] Ask the USER to ratify a drafted intent proposal. Rivet shows them the exact change in a confirmation prompt from their MCP client; " +
+				"only their answer can approve it — you cannot see or answer that prompt, and nothing you pass can approve on their behalf. " +
+				"Call it when the user wants to approve a proposal (after rivet.intent-propose, or one listed by 'rivet intent proposals'). " +
+				"If they decline or dismiss it, nothing changes; ask whether they want it redrafted or rejected.",
+			InputSchema: inputSchema{
+				Type: "object",
+				Properties: map[string]interface{}{
+					"proposal": map[string]interface{}{
+						"type":        "string",
+						"description": "The proposal name from rivet.intent-propose's reply (e.g. 'add-bil-012-46d767'), or its short suffix ('46d767').",
+					},
+				},
+				Required: []string{"proposal"},
+			},
+		},
+		Tool{
 			Name:        "rally.pin",
 			Description: "[safe] Pin a rally ticket so it stays injected into chat context across turns. Use when starting work on a ticket the user has named.",
 			InputSchema: inputSchema{
@@ -691,6 +731,8 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 		return s.handleIntent(req, params.Arguments)
 	case "rivet.intent-propose":
 		return s.handleIntentPropose(req, params.Arguments)
+	case "rivet.intent-approve":
+		return s.handleIntentApprove(req, params.Arguments)
 	case "rally.pin":
 		id, _ := params.Arguments["id"].(string)
 		note, _ := params.Arguments["note"].(string)

@@ -91,7 +91,7 @@ func Show(doc *Document, all []*Document, o ShowOptions) (string, error) {
 		b.WriteString(outline)
 		b.WriteString("\n---\n\n")
 	} else {
-		fmt.Fprintf(&b, "[rivet] %s (%s), page %d of %d.\n\n---\n\n", doc.Name, size, page, len(pages))
+		fmt.Fprintf(&b, "[rivet] %s, %s — page %d of %d.\n\n---\n\n", doc.Name, size, page, len(pages))
 	}
 	b.WriteString(pages[page-1])
 	writePageFooter(&b, o.MCP, doc.Name, "", page, len(pages))

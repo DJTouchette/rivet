@@ -44,7 +44,7 @@ func TestEnsureAgents_WritesRivetExplorer(t *testing.T) {
 	if !strings.Contains(content, "model: haiku") {
 		t.Fatalf("agent file missing model override: %s", content)
 	}
-	if !strings.Contains(content, "tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend") {
+	if !strings.Contains(content, "tools: Read, Grep, Glob, mcp__rivet__rivet_context-recommend") {
 		t.Fatalf("agent file missing tool restrictions: %s", content)
 	}
 	if strings.Contains(content, "mcp__rivet__rivet_learn") {

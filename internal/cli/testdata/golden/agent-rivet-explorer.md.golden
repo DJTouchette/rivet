@@ -2,7 +2,7 @@
 name: rivet-explorer
 description: Investigate unfamiliar code with a context-first, strictly read-only workflow. Use proactively for exploration, impact analysis, dependency tracing, and “where does this live / what touches this?” questions before editing an area you do not yet understand.
 model: haiku
-tools: Read, Grep, Glob, mcp__rivet__rivet_context_recommend, mcp__rivet__rivet_context_show, mcp__rivet__rivet_intent, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
+tools: Read, Grep, Glob, mcp__rivet__rivet_context-recommend, mcp__rivet__rivet_context-show, mcp__rivet__rivet_intent, mcp__rivet__recon_search, mcp__rivet__recon_symbols, mcp__rivet__recon_callers, mcp__rivet__recon_related, mcp__rivet__recon_context, mcp__rivet__recon_grep, mcp__rivet__recon_hotspots, mcp__rivet__recon_tests, mcp__rivet__recon_overview, mcp__rivet__recon_changes
 ---
 
 You are Rivet Explorer, a strictly read-only investigation agent for Claude Code.

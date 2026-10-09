@@ -25,12 +25,10 @@ github.com/danieljoos/wincred v1.2.3/go.mod h1:6qqX0WNrS4RzPZ1tnroDzq9kY3fu1KwE7
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/djtouchette/recon v0.13.1 h1:SB1Rd0tPrfm3o+kXIiSHejlO11iiRxS+SmTr1N6QVUo=
-github.com/djtouchette/recon v0.13.1/go.mod h1:yFsZJT9FiYoGR8q4FzyDuSwRKhYFp7XE//WGZZvL944=
+github.com/djtouchette/recon v0.13.2 h1:PdT7mZT+Tdi/04sZ82ghFUVku/06MTdhIhKyC1xIXIQ=
+github.com/djtouchette/recon v0.13.2/go.mod h1:yFsZJT9FiYoGR8q4FzyDuSwRKhYFp7XE//WGZZvL944=
 github.com/djtouchette/vaulty v0.4.0 h1:BIEVMEHS/OFvLZcY4a5HxCGDBMsO6pfBYNuHZLsBcsw=
 github.com/djtouchette/vaulty v0.4.0/go.mod h1:xStYbWtFYLTajuIwxrJwsL9szkPgCI8PaT3mdhbfpK8=
-github.com/djtouchette/witness v0.5.0 h1:6XIIeXS4tGDtHaOzhVoueBUAiGcpy3Cy5Zo1lOZXweI=
-github.com/djtouchette/witness v0.5.0/go.mod h1:EzkNOKS8Wo+E6/NqzdWAEH2JwdYn3ynOlWpjmZmE+0A=
 github.com/djtouchette/witness v0.6.0 h1:3uQB/81VrD7JAIY48bUzwec6+FObzhrKK8KKXeBqZs8=
 github.com/djtouchette/witness v0.6.0/go.mod h1:zi1kghoIkm+twSqR4YxAqwNzNjqOiFq/4Oo7aiiHYGo=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=

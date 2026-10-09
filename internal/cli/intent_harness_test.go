@@ -1274,3 +1274,39 @@ func TestIntentHarness_SupervisedRuleWriting(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentTemplatesNameRealMCPTools guards the generated agents' tools: allowlists. Claude Code
+// exposes an MCP tool as mcp__<server>__<name> with "." turned into "_" but "-" kept, so
+// rivet.context-recommend is mcp__rivet__rivet_context-recommend. An allowlist entry that names
+// no real tool is dropped without a word, which once left both recon agents unable to call the
+// context tools their own prompts tell them to call first.
+func TestAgentTemplatesNameRealMCPTools(t *testing.T) {
+	s := newShop(t)
+	r := s.mcp(map[string]interface{}{"method": "tools/list", "params": map[string]interface{}{}})
+	exposed := map[string]bool{}
+	for _, raw := range r[0].Result.Tools {
+		var tl struct{ Name string }
+		_ = json.Unmarshal(raw, &tl)
+		exposed["mcp__rivet__"+strings.ReplaceAll(tl.Name, ".", "_")] = true
+	}
+
+	for label, tmpl := range map[string]string{"rivet-explorer": rivetExplorerAgent, "rivet-investigator": rivetInvestigatorAgent} {
+		var tools string
+		for _, line := range strings.Split(tmpl, "\n") {
+			if strings.HasPrefix(line, "tools:") {
+				tools = strings.TrimPrefix(line, "tools:")
+			}
+		}
+		if tools == "" {
+			t.Fatalf("%s: no tools: line", label)
+		}
+		for _, tool := range strings.Split(tools, ",") {
+			tool = strings.TrimSpace(tool)
+			// The recon tools come from the project's capability config, which this shop
+			// does not load; the built-in rivet.* tools are always served.
+			if strings.HasPrefix(tool, "mcp__rivet__rivet_") && !exposed[tool] {
+				t.Errorf("%s allowlists %q, which the rivet MCP server does not expose", label, tool)
+			}
+		}
+	}
+}

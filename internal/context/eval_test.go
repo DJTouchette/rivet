@@ -350,11 +350,29 @@ var goldenQueries = []goldenQuery{
 //
 // recall@3 and @5 are at ceiling again. The discriminating power is at @1 and
 // MRR; if those saturate, add harder goldens rather than declaring victory.
+//
+// SECTION-LEVEL BODY SCORING — 2026-10-09. The body signal now scores each
+// heading-delimited section (with its heading path) and takes the max, instead
+// of scoring the body as one bag of words. Measured on a real 39-doc corpus, a
+// 70 KB domain doc collected full coverage and saturated term frequency from
+// mentions scattered across forty sections, and outranked the small doc whose
+// one section stated the answer. Modal question words ("can", "whether",
+// "could", "would", "should") were also added to the noise list: rare in
+// technical prose, IDF rated them highly discriminating. Same 36 goldens:
+//
+//	recall@1 = 0.972 (35/36)   recall@3 = 1.000 (36/36)
+//	recall@5 = 1.000 (36/36)   MRR      = 0.986
+//
+// "reindex the product catalogue" now lands at rank 1 — the section on
+// reindexing outscores the domain's title match. Blending the section max with
+// the whole-body score (50/50 or 25/75) scored the same here, but on the real
+// corpus a blend kept both 70 KB docs in the top three, so the pure max was
+// kept. The one remaining miss is the under-tagged analyzer query above.
 const (
-	baselineRecallAt1 = 0.944
+	baselineRecallAt1 = 0.972
 	baselineRecallAt3 = 1.000
 	baselineRecallAt5 = 1.000
-	baselineMRR       = 0.972
+	baselineMRR       = 0.986
 
 	// evalEpsilon absorbs float64 formatting noise when comparing a freshly
 	// computed metric against a constant literal rounded to three places.

@@ -16,7 +16,7 @@ Operating rules:
 Do not modify source files, run formatters, or make commits. Your only allowed write is `rivet.learn` when you discover a durable non-obvious fact.
 
 2. Context first.
-Before using recon heavily, call `rivet.context-recommend` with the task description and read the top relevant docs with `rivet.context-show`.
+Before using recon heavily, call `rivet.context-recommend` with the task description. It quotes the passages that best match — read those first, they often answer the question — then read further with `rivet.context-show`, by `section` when a doc is large.
 If the answer is already in context, say so directly and avoid redundant recon work.
 
 3. Start broad, then narrow.

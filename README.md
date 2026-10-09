@@ -81,6 +81,10 @@ Context docs are the **curated** tier: deliberately edited, kept short, reviewed
 
 Context docs are exposed as MCP resources, so Claude can pull the right domain knowledge before making changes. The recommendation engine scores docs by tag matches, file path globs, and keyword relevance, so Claude doesn't have to guess which context to read.
 
+Recommend returns content, not just names. Below the ranked docs it quotes the passages that best match the query (a bullet or paragraph, labelled with its document and heading path) within a token budget (`--budget`, default 6000). Body text is scored section by section, so a short doc whose one section states the answer is not outranked by a 70 KB doc that mentions every query word somewhere.
+
+`context show` never returns more than 8000 tokens. A larger doc returns its outline (headings with sizes) and the opening sections, and says how to get the rest: `--section "<heading>"` for one section with its subsections, `--page N` to page through. The MCP tool takes the same `section` and `page` arguments. A whole large doc used to overflow Claude Code's tool-output limit, or lose its middle to Codex's head-and-tail truncation.
+
 ### Linking Docs Together
 
 Docs cross-reference each other with `[[doc-name]]`, the same syntax Obsidian uses. An alias works too: `[[payment-retry|the retry scheduler]]`.
@@ -582,9 +586,9 @@ rivet inspect capabilities    List what's registered and its safety level
 rivet project run <cap>       Run a capability from the terminal
 rivet run <args...>           Pass through to your registered project CLI
 rivet context list            List context docs
-rivet context show <name>     Read one
+rivet context show <name>     Read one (--section <heading>, --page N for large docs)
 rivet context scaffold        Generate starter docs from recon analysis
-rivet context recommend <q>   "What context is relevant to this task?"
+rivet context recommend <q>   "What context is relevant to this task?" (quotes the matching passages)
 rivet context index           Precompute embeddings for semantic recommend (optional)
 rivet runbook find <symptom>  Find the operational runbook for a symptom
 rivet runbook list            List runbooks and their triggers

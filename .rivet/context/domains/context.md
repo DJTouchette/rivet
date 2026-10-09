@@ -1,7 +1,7 @@
 ---
 tags: [context, retrieval, recommend, learnings, wiki, runbooks, embeddings, curated, weighting, scoring, intent, rules, markers]
 owner: djtouchette
-last_reviewed: 2026-10-07
+last_reviewed: 2026-10-09
 related_paths:
   - "internal/context/**"
 ---
@@ -49,6 +49,9 @@ promotion pass folds it into a curated doc.
 ## Key modules
 
 - `recommend.go` — the scorer; lexical signals plus an optional semantic one
+- `sections.go` — `SplitSections` (heading-delimited, tiles the body) and `SplitPassages` (one bullet or paragraph); the unit for body scoring, excerpts and show paging
+- `excerpts.go` — `WithExcerpts`: BM25 over the top docs' passages, quoted under recommend within a token budget; `FormatRecommendations` shared by CLI and MCP
+- `show.go` — `Show`: budgeted context-show (outline + page 1, `section`, `page`); the only path CLI and MCP use to print a doc
 - `context.go` — `Document`, `Kind`, frontmatter loading
 - `learnings.go` — `CreateLearning`, `CountActive`, `MarkPromoted`, `ArchiveLearning`
 - `wiki.go`, `runbook.go`, `codedocs.go` — the other three tiers
@@ -73,6 +76,19 @@ promotion pass folds it into a curated doc.
   under pressure is worse than none, so the gate is intentional.
 
 ## Gotchas
+
+- **The body signal is the best SECTION's score, not the whole body's.**
+  `scoreSectionMatch` takes the max over sections (heading path included).
+  Whole-body scoring let a 70 KB doc win on query words scattered across forty
+  sections. A blend with the whole-body score tied on the eval set but kept the
+  big docs on top in a real corpus, so do not reintroduce one without checking a
+  large-doc corpus too.
+- **Excerpts use BM25 over passages, not the doc scorer.** The doc scorer's
+  saturating TF picks repetitive tables; presence-only picks the longest bullet.
+  Passage IDF is measured over the candidate passages, not docs.
+- **Every output budget is bytes/4.** `bytesPerToken` in `excerpts.go`; show
+  defaults to 8000 tokens because Claude Code rejects tool results over ~25K
+  and Codex keeps only head+tail of output over ~10K.
 
 - **Scoring is additive and clamped at 1.0.** Signals (tag 0.5/0.6, name
   0.4/0.5/0.6, path, body, `semanticWeight` 0.45) sum, then multiply by

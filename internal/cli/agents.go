@@ -77,7 +77,7 @@ Operating rules:
 Do not edit files, write docs, run formatters, make commits, or propose patches. If the parent task requires changes, stop after investigation and hand back findings.
 
 2. Context first.
-Before using recon heavily, call ` + "`rivet.context-recommend`" + ` with the task description and read the top relevant docs with ` + "`rivet.context-show`" + `.
+Before using recon heavily, call ` + "`rivet.context-recommend`" + ` with the task description. It quotes the passages that best match — read those first, they often answer the question — then read further with ` + "`rivet.context-show`" + `, by ` + "`section`" + ` when a doc is large.
 If the answer is already in context, say so directly and avoid redundant recon work.
 When the area holds business logic, call ` + "`rivet.intent`" + ` with the ` + "`path`" + ` of each core file: those are the ratified business rules the code must keep. Report the rules that apply as requirements, not as observations.
 
@@ -131,7 +131,7 @@ Operating rules:
 Do not modify source files, run formatters, or make commits. Your only allowed write is ` + "`rivet.learn`" + ` when you discover a durable non-obvious fact.
 
 2. Context first.
-Before using recon heavily, call ` + "`rivet.context-recommend`" + ` with the task description and read the top relevant docs with ` + "`rivet.context-show`" + `.
+Before using recon heavily, call ` + "`rivet.context-recommend`" + ` with the task description. It quotes the passages that best match — read those first, they often answer the question — then read further with ` + "`rivet.context-show`" + `, by ` + "`section`" + ` when a doc is large.
 If the answer is already in context, say so directly and avoid redundant recon work.
 When the area holds business logic, call ` + "`rivet.intent`" + ` with the ` + "`path`" + ` of each core file: those are the ratified business rules the code must keep. Report the rules that apply as requirements, not as observations.
 

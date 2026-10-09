@@ -45,15 +45,15 @@ func GenerateInstructions(p provider.Provider, caps []capabilities.Capability, d
 	// Tiered workflow.
 	b.WriteString("### Understand tasks (explain, audit, review, investigate)\n\n")
 	b.WriteString("Context docs are the first source of truth. Most questions are already answered there.\n\n")
-	b.WriteString("1. **`rivet.context-recommend`** with your task description\n")
-	b.WriteString("2. **`rivet.context-show`** to read the recommended docs\n")
+	b.WriteString("1. **`rivet.context-recommend`** with your task description — it returns the ranked docs and quotes the passages that best match, which often answer the question outright\n")
+	b.WriteString("2. **`rivet.context-show`** to read further — pass `section` for one heading; a doc too large for one response returns an outline and is paged with `page`\n")
 	b.WriteString("3. **Read the source code** if the context doc doesn't fully answer the question\n")
 	b.WriteString("4. **`recon.search`** to find the area, then **`recon.grep`** to find the exact line\n")
 	b.WriteString("5. **`rivet.learn`**: you MUST record any non-obvious finding. This is not optional.\n\n")
 
 	b.WriteString("### Change tasks (fix, add, refactor)\n\n")
 	b.WriteString("Changes require understanding blast radius. Use the full recon sweep.\n\n")
-	b.WriteString("1. **`rivet.context-recommend`** → **`rivet.context-show`** — read domain context first\n")
+	b.WriteString("1. **`rivet.context-recommend`** → **`rivet.context-show`** (by `section` for large docs) — read domain context first\n")
 	b.WriteString("2. **`recon.related`** on the file you plan to change — know what depends on it\n")
 	b.WriteString("3. **`recon.hotspots`** if refactoring — know which files are riskiest\n")
 	b.WriteString("4. **`recon.grep`** to trace callers and assess impact. `--type definition` narrows to definitions.\n")
@@ -108,7 +108,7 @@ func GenerateInstructions(p provider.Provider, caps []capabilities.Capability, d
 	b.WriteString("| Tool | Args | Example |\n")
 	b.WriteString("|------|------|---------|\n")
 	b.WriteString("| `rivet.context-recommend` | `{\"query\": \"...\"}` | `{\"query\": \"how does billing work\"}` |\n")
-	b.WriteString("| `rivet.context-show` | `{\"name\": \"...\"}` | `{\"name\": \"billing\"}` |\n")
+	b.WriteString("| `rivet.context-show` | `{\"name\": \"...\"}`, plus optional `\"section\"` or `\"page\"` | `{\"name\": \"billing\"}`, `{\"name\": \"billing\", \"section\": \"Gotchas\"}` |\n")
 	b.WriteString("| `rivet.intent` | `{\"path\": \"...\"}`, `{\"id\": \"...\"}` or `{\"changes\": true}` | `{\"path\": \"lib/app/billing/invoice.ex\"}`, `{\"id\": \"BIL-001\"}` |\n")
 	b.WriteString("| `rivet.intent-propose` | `{\"change\": \"amend\", \"rule_id\": \"...\", \"statement\": \"...\", \"why\": \"...\"}` | `{\"change\": \"amend\", \"rule_id\": \"BIL-010\", \"statement\": \"Dunning starts 7 days after due\", \"why\": \"finance asked\"}` |\n")
 	b.WriteString("| `rivet.intent-approve` | `{\"proposal\": \"...\"}` | `{\"proposal\": \"add-bil-012-46d767\"}` — the user confirms in a prompt |\n")
@@ -165,7 +165,7 @@ func writeContext(b *strings.Builder, docs []*rivetctx.Document) {
 	}
 
 	b.WriteString("## Context Documents\n\n")
-	b.WriteString("Structured context is available via MCP resources or `rivet context show <name>`.\n\n")
+	b.WriteString("Structured context is available via MCP resources or `rivet context show <name>` (`--section \"<heading>\"` for one section; docs too large for one response are paged).\n\n")
 
 	domains := filterByKind(docs, rivetctx.KindDomain)
 	modules := filterByKind(docs, rivetctx.KindModule)

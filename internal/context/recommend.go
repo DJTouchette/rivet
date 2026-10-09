@@ -16,6 +16,10 @@ type Recommendation struct {
 	Score    float64   `json:"score"`
 	Signals  []string  `json:"signals"`
 	URI      string    `json:"uri"`
+	// Excerpts are the passages of this document that best match the query,
+	// most relevant first. Populated only when Recommend is called
+	// WithExcerpts, and only for documents that had a passage worth quoting.
+	Excerpts []Excerpt `json:"excerpts,omitempty"`
 }
 
 // Semantic is the optional embedding-based scorer. It is satisfied by
@@ -39,7 +43,8 @@ const semanticWeight = 0.45
 type Option func(*recommendOpts)
 
 type recommendOpts struct {
-	sem Semantic
+	sem           Semantic
+	excerptBudget int // tokens; 0 = no excerpts
 }
 
 // WithSemantic adds an embedding-based "semantic-match" signal. A nil scorer,
@@ -107,8 +112,8 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 			signals = append(signals, nameSignal)
 		}
 
-		// Signal 4: Body keyword match
-		bodyScore, bodySignal := scoreBodyMatchWeighted(doc.Body, tokens, idf)
+		// Signal 4: Body keyword match, scored per section (see scoreSectionMatch)
+		bodyScore, bodySignal := scoreSectionMatch(doc.Body, tokens, idf)
 		if bodyScore > 0 {
 			score += bodyScore
 			signals = append(signals, bodySignal)
@@ -157,6 +162,10 @@ func Recommend(docs []*Document, query string, maxResults int, opts ...Option) [
 		results = results[:maxResults]
 	}
 
+	if o.excerptBudget > 0 {
+		attachExcerpts(results, tokens, idf, o.excerptBudget)
+	}
+
 	return results
 }
 
@@ -202,6 +211,12 @@ func tokenize(query string) []string {
 		"how": true, "what": true, "why": true, "where": true, "when": true,
 		"investigate": true, "fix": true, "debug": true, "look": true, "check": true,
 		"find": true, "show": true, "get": true,
+		// Modal and question scaffolding. These are rare in technical prose,
+		// so IDF rated them as highly discriminating, and a question phrased
+		// "whether ... can ..." went looking for whichever passage happened to
+		// use those words. "does"/"do" are deliberately absent: a definition
+		// query ("what does X mean") is answered by prose that says what X does.
+		"can": true, "could": true, "would": true, "should": true, "whether": true,
 	}
 
 	parts := strings.Fields(strings.ToLower(query))
@@ -700,4 +715,41 @@ func scoreBodyMatchWeighted(body string, tokens []string, idf map[string]float64
 	}
 
 	return weight, "body-match"
+}
+
+// scoreSectionMatch scores a body by its best-matching section rather than as
+// one bag of words.
+//
+// Whole-body scoring had a length bias that no amount of IDF could fix: a 70 KB
+// domain doc contains nearly every word in a query somewhere, so it earned
+// full coverage and saturated term frequency from mentions scattered across
+// forty unrelated sections, while a small doc whose one section states the
+// answer outright could not keep up. Scoring each section and taking the max —
+// not the mean, which would punish a doc for covering other subjects too —
+// asks whether any one place in the doc is about the query, which is the
+// question an agent is asking.
+//
+// The section's heading path is scored with its text, so a section titled
+// "Owner visibility" is credited for those words even when its bullets don't
+// repeat them. A body with no headings is a single section, which reduces to
+// the whole-body score.
+func scoreSectionMatch(body string, tokens []string, idf map[string]float64) (float64, string) {
+	sections := SplitSections(body)
+	if len(sections) == 0 {
+		return 0, ""
+	}
+	best := 0.0
+	for _, sec := range sections {
+		text := sec.Text
+		if p := sec.PathString(); p != "" {
+			text = p + "\n" + text
+		}
+		if v, _ := scoreBodyMatchWeighted(text, tokens, idf); v > best {
+			best = v
+		}
+	}
+	if best == 0 {
+		return 0, ""
+	}
+	return best, "body-match"
 }

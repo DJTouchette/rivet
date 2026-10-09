@@ -469,7 +469,7 @@ func (s *Server) handleToolsList(req *Request) *Response {
 		},
 		Tool{
 			Name:        "rivet.context-show",
-			Description: "[safe] Show a context document by name",
+			Description: fmt.Sprintf("[safe] Show a context document by name. Output is capped at ~%d tokens: a larger doc returns an outline of its sections with sizes plus the opening sections — then pass 'section' to read one section, or 'page' to continue.", rivetctx.DefaultShowBudget),
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
@@ -477,18 +477,30 @@ func (s *Server) handleToolsList(req *Request) *Response {
 						"type":        "string",
 						"description": "Name of the context document to show (e.g. 'billing', 'sql-views')",
 					},
+					"section": map[string]interface{}{
+						"type":        "string",
+						"description": "Optional. Return only the section under this heading, with its subsections (case-insensitive; a heading path like 'Gotchas > Owner visibility' also works)",
+					},
+					"page": map[string]interface{}{
+						"type":        "integer",
+						"description": "Optional. 1-based page of a doc or section that is over the size cap; the response says how many pages there are",
+					},
 				},
 			},
 		},
 		Tool{
 			Name:        "rivet.context-recommend",
-			Description: "[safe] Recommend context documents for a task, file path, or keywords",
+			Description: "[safe] Recommend context documents for a task, file path, or keywords. Returns the ranked docs AND the passages from them that best match the query (heading path + text) — often the answer itself. Read more of a doc with rivet.context-show and its 'section' argument.",
 			InputSchema: inputSchema{
 				Type: "object",
 				Properties: map[string]interface{}{
 					"query": map[string]interface{}{
 						"type":        "string",
 						"description": "A task description, file path, or keywords (e.g. 'investigate billing retries', 'backend/Handlers/PaymentGateway/src/App.cs')",
+					},
+					"budget": map[string]interface{}{
+						"type":        "integer",
+						"description": fmt.Sprintf("Optional. Token budget for the quoted passages (default %d, max %d; 0 = names only)", rivetctx.DefaultExcerptBudget, maxMCPExcerptBudget),
 					},
 				},
 			},
@@ -771,10 +783,16 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	case "rivet.context-show":
 		s.contextShown = true
 		name, _ := params.Arguments["name"].(string)
-		return s.handleContextShow(req, name)
+		section, _ := params.Arguments["section"].(string)
+		page, _ := intArg(params.Arguments, "page")
+		return s.handleContextShow(req, name, section, page)
 	case "rivet.context-recommend":
 		query, _ := params.Arguments["query"].(string)
-		return s.handleContextRecommend(req, query)
+		budget, ok := intArg(params.Arguments, "budget")
+		if !ok {
+			budget = rivetctx.DefaultExcerptBudget
+		}
+		return s.handleContextRecommend(req, query, budget)
 	case "rivet.runbook":
 		query, _ := params.Arguments["query"].(string)
 		return s.handleRunbook(req, query)
@@ -1015,7 +1033,29 @@ func (s *Server) handleContextList(req *Request) *Response {
 	}
 }
 
-func (s *Server) handleContextShow(req *Request, name string) *Response {
+// maxMCPExcerptBudget caps the excerpt budget an agent may ask for, so a
+// generous request cannot push a recommend result past the client's own
+// tool-output limit.
+const maxMCPExcerptBudget = 12000
+
+// intArg reads an integer argument. JSON numbers arrive as float64; some
+// clients send numbers as strings, which are accepted too.
+func intArg(args map[string]interface{}, key string) (int, bool) {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case string:
+		var n int
+		if _, err := fmt.Sscanf(strings.TrimSpace(v), "%d", &n); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func (s *Server) handleContextShow(req *Request, name, section string, page int) *Response {
 	if name == "" {
 		return &Response{
 			JSONRPC: "2.0",
@@ -1035,8 +1075,20 @@ func (s *Server) handleContextShow(req *Request, name string) *Response {
 		if doc.Name == name {
 			// Outgoing links are appended so the agent can walk the graph —
 			// a domain doc pointing at the module doc that explains a detail
-			// is useless if the pointer isn't followable.
-			text := doc.Body + rivetctx.FormatWikiLinks(doc, all)
+			// is useless if the pointer isn't followable. Show keeps the
+			// result under budget: a 76 KB doc returned whole exceeded
+			// Claude Code's tool-output limit and came back as an error.
+			text, err := rivetctx.Show(doc, all, rivetctx.ShowOptions{Section: section, Page: page, MCP: true})
+			if err != nil {
+				return &Response{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Result: ToolCallResult{
+						Content: []ContentItem{{Type: "text", Text: "Error: " + err.Error()}},
+						IsError: true,
+					},
+				}
+			}
 			return &Response{
 				JSONRPC: "2.0",
 				ID:      req.ID,
@@ -1055,7 +1107,7 @@ func (s *Server) handleContextShow(req *Request, name string) *Response {
 	}
 }
 
-func (s *Server) handleContextRecommend(req *Request, query string) *Response {
+func (s *Server) handleContextRecommend(req *Request, query string, budget int) *Response {
 	if query == "" {
 		return &Response{
 			JSONRPC: "2.0",
@@ -1076,7 +1128,10 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 	// rivet.runbook tool.
 	pool := append(append([]*rivetctx.Document{}, s.contexts...), s.wiki...)
 	pool = append(pool, s.code...)
-	recs := rivetctx.Recommend(pool, query, 5, opts...)
+	if budget > maxMCPExcerptBudget {
+		budget = maxMCPExcerptBudget
+	}
+	recs := rivetctx.Recommend(pool, query, 5, append(opts, rivetctx.WithExcerpts(budget))...)
 
 	// Business rules are listed first and apart: they constrain the change,
 	// where everything below only explains the code.
@@ -1092,14 +1147,7 @@ func (s *Server) handleContextRecommend(req *Request, query string) *Response {
 
 	var sb strings.Builder
 	sb.WriteString(rivetctx.FormatIntentRecommendations(intentRecs))
-	if len(recs) > 0 {
-		sb.WriteString(fmt.Sprintf("Recommended context for %q:\n\n", query))
-	}
-	for _, r := range recs {
-		sb.WriteString(fmt.Sprintf("  %.2f  [%s] %s — %s\n", r.Score, r.Kind, r.Name, r.Title))
-		sb.WriteString(fmt.Sprintf("        signals: %s\n", strings.Join(r.Signals, ", ")))
-		sb.WriteString(fmt.Sprintf("        uri: %s\n\n", r.URI))
-	}
+	sb.WriteString(rivetctx.FormatRecommendations(query, recs, true))
 	sb.WriteString(semanticCaveat(s.semantic))
 
 	return &Response{

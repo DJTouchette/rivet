@@ -151,10 +151,27 @@ func newContextListCmd() *cobra.Command {
 }
 
 func newContextShowCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		section string
+		page    int
+		budget  int
+	)
+	cmd := &cobra.Command{
 		Use:   "show <name>",
 		Short: "Show a context document by name",
-		Args:  cobra.ExactArgs(1),
+		Long: `Show a context document by name.
+
+Output never exceeds --budget tokens (default ` + fmt.Sprint(rivetctx.DefaultShowBudget) + `, ~4 bytes each). A
+document over budget prints page 1 — an outline of its sections with their
+sizes, then the opening sections — and says how to get the rest:
+
+  rivet context show <name> --section "<heading>"   one section, with its subsections
+  rivet context show <name> --page 2                the next page
+
+--section matches a heading case-insensitively, or a heading path such as
+"Gotchas > Owner visibility". A section that is itself over budget is paged
+the same way: --section "<heading>" --page 2.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Search every tier, not just curated context: context-recommend
 			// surfaces wiki docs too, and a name it returned has to be
@@ -176,8 +193,15 @@ func newContextShowCmd() *cobra.Command {
 			name := args[0]
 			for _, d := range docs {
 				if d.Name == name {
-					fmt.Print(d.Body)
-					fmt.Print(rivetctx.FormatWikiLinks(d, docs))
+					out, err := rivetctx.Show(d, docs, rivetctx.ShowOptions{
+						Section: section,
+						Page:    page,
+						Budget:  budget,
+					})
+					if err != nil {
+						return err
+					}
+					fmt.Print(out)
 					return nil
 				}
 			}
@@ -185,12 +209,17 @@ func newContextShowCmd() *cobra.Command {
 			return fmt.Errorf("context document %q not found; run 'rivet context list' to see available documents", name)
 		},
 	}
+	cmd.Flags().StringVar(&section, "section", "", "show only the section under this heading (or heading path)")
+	cmd.Flags().IntVar(&page, "page", 0, "page of an over-budget document or section (1-based)")
+	cmd.Flags().IntVar(&budget, "budget", rivetctx.DefaultShowBudget, "maximum output size in tokens (~4 bytes each)")
+	return cmd
 }
 
 func newContextRecommendCmd() *cobra.Command {
 	var (
 		maxResults int
 		jsonOutput bool
+		budget     int
 	)
 	cmd := &cobra.Command{
 		Use:   "recommend <query>",
@@ -203,6 +232,15 @@ The query can be:
   - keywords: "payment invoice retry"
 
 Matching uses document tags, related_paths globs, titles, and body keywords.
+Body text is scored section by section, so a short section that answers the
+query outranks a long document that merely mentions every word somewhere.
+
+Below the ranked list it quotes the passages that best match the query, each
+labelled with its document and heading path, within --budget tokens (default
+` + fmt.Sprint(rivetctx.DefaultExcerptBudget) + `; 0 lists names only). Often a passage is the answer. When it is
+not, read the section it came from:
+
+  rivet context show <name> --section "<heading>"
 
 To add tags and related_paths, use frontmatter in context documents:
 
@@ -248,7 +286,7 @@ To add tags and related_paths, use frontmatter in context documents:
 				scorer = s
 				opts = append(opts, rivetctx.WithSemantic(s))
 			}
-			recs := rivetctx.Recommend(docs, query, maxResults, opts...)
+			recs := rivetctx.Recommend(docs, query, maxResults, append(opts, rivetctx.WithExcerpts(budget))...)
 			warnSemanticFailure(scorer)
 
 			learnings, _ := rivetctx.LoadLearnings(".rivet/learnings")
@@ -281,14 +319,7 @@ To add tags and related_paths, use frontmatter in context documents:
 
 			fmt.Print(rivetctx.FormatIntentRecommendations(intentRecs))
 
-			if len(recs) > 0 {
-				fmt.Printf("Recommended context for %q:\n\n", query)
-				for _, r := range recs {
-					fmt.Printf("  %.2f  [%s] %s — %s\n", r.Score, r.Kind, r.Name, r.Title)
-					fmt.Printf("        signals: %s\n", strings.Join(r.Signals, ", "))
-					fmt.Printf("        uri: %s\n\n", r.URI)
-				}
-			}
+			fmt.Print(rivetctx.FormatRecommendations(query, recs, false))
 
 			if len(learnRecs) > 0 {
 				fmt.Printf("Related learning log entries (unverified):\n\n")
@@ -307,6 +338,7 @@ To add tags and related_paths, use frontmatter in context documents:
 	}
 	cmd.Flags().IntVarP(&maxResults, "max", "n", 5, "max results")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
+	cmd.Flags().IntVar(&budget, "budget", rivetctx.DefaultExcerptBudget, "token budget for passages quoted from the top docs (0 = names only)")
 	return cmd
 }
 
